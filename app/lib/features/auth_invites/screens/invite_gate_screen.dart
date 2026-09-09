@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/constants/roles.dart';
 import '../../../core/theme/app_theme.dart';
 import '../state/auth_provider.dart';
 import 'signup_screen.dart';
@@ -44,11 +43,6 @@ class _InviteGateScreenState extends ConsumerState<InviteGateScreen> {
         builder: (_) => SignupScreen(inviteCode: code.toUpperCase()),
       ),
     );
-  }
-
-  void _useSampleCode(String code) {
-    _codeController.text = code;
-    setState(() => _errorMessage = null);
   }
 
   @override
@@ -98,16 +92,7 @@ class _InviteGateScreenState extends ConsumerState<InviteGateScreen> {
                       letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    'UK VEX Robotics Volunteer & Official Management',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      fontSize: 14,
-                      color: Colors.grey[600],
-                    ),
-                  ),
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 32),
 
                   Card(
                     elevation: 0,
@@ -135,7 +120,7 @@ class _InviteGateScreenState extends ConsumerState<InviteGateScreen> {
                           ),
                           const SizedBox(height: 10),
                           Text(
-                            'Volunteer signup is currently restricted to authorized personnel with an invitation code.',
+                            'Volunteer signup is currently limited to invitation codes.',
                             style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                           ),
                           const SizedBox(height: 20),
@@ -145,7 +130,7 @@ class _InviteGateScreenState extends ConsumerState<InviteGateScreen> {
                             textCapitalization: TextCapitalization.characters,
                             decoration: InputDecoration(
                               labelText: 'Invitation Code',
-                              hintText: 'e.g. UKVEX-2026',
+                              hintText: 'Enter your invitation code',
                               prefixIcon: const Icon(Icons.vpn_key_outlined),
                               errorText: _errorMessage,
                             ),
@@ -163,46 +148,6 @@ class _InviteGateScreenState extends ConsumerState<InviteGateScreen> {
                           ),
                         ],
                       ),
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-
-                  // Quick test codes helper
-                  Container(
-                    padding: const EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: Colors.blueGrey.withValues(alpha: 0.07),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Row(
-                          children: [
-                            Icon(Icons.info_outline, size: 16, color: Colors.blueGrey),
-                            SizedBox(width: 6),
-                            Text(
-                              'Available Admin Invite Codes:',
-                              style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 6,
-                          children: kAdminInviteCodes.map((c) {
-                            final isEp = c == 'UK-EP-VERIFIED';
-                            return ActionChip(
-                              label: Text(
-                                isEp ? '$c (EP Mode)' : c,
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              onPressed: () => _useSampleCode(c),
-                            );
-                          }).toList(),
-                        ),
-                      ],
                     ),
                   ),
                 ],
