@@ -55,6 +55,12 @@ class VolunteerRepository {
     }
   }
 
+  /// Get all event signups for a specific volunteer
+  Future<List<EventSignupModel>> getSignupsForVolunteer(String volunteerId) async {
+    final all = _loadAllSignups();
+    return all.where((s) => s.volunteerId == volunteerId).toList();
+  }
+
   /// Save or update a volunteer signup (Available or Confirmed)
   Future<EventSignupModel> saveSignup({
     required String sku,

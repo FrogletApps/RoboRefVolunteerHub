@@ -17,10 +17,23 @@ class CurrentVolunteerNotifier extends StateNotifier<VolunteerModel?> {
 
   CurrentVolunteerNotifier(this._authService) : super(_authService.getCurrentVolunteer());
 
+  Future<VolunteerModel> login({
+    required String email,
+    required String password,
+  }) async {
+    final volunteer = await _authService.login(
+      email: email,
+      password: password,
+    );
+    state = volunteer;
+    return volunteer;
+  }
+
   Future<VolunteerModel> signup({
     required String inviteCode,
     required String name,
     required String email,
+    required String password,
     String? phone,
     List<String> qualifications = const [],
     bool isEmailPublic = false,
@@ -31,6 +44,7 @@ class CurrentVolunteerNotifier extends StateNotifier<VolunteerModel?> {
       inviteCode: inviteCode,
       name: name,
       email: email,
+      password: password,
       phone: phone,
       qualifications: qualifications,
       isEmailPublic: isEmailPublic,

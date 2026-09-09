@@ -17,6 +17,8 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
   final _nameController = TextEditingController();
   final _emailController = TextEditingController();
+  final _passwordController = TextEditingController();
+  final _confirmPasswordController = TextEditingController();
   final _phoneController = TextEditingController();
 
   final Set<String> _selectedQualifications = {'head_ref', 'ref'};
@@ -24,11 +26,15 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   bool _isEmailPublic = false;
   bool _forwardingEnabled = true;
   bool _isLoading = false;
+  bool _obscurePassword = true;
+  bool _obscureConfirmPassword = true;
 
   @override
   void dispose() {
     _nameController.dispose();
     _emailController.dispose();
+    _passwordController.dispose();
+    _confirmPasswordController.dispose();
     _phoneController.dispose();
     super.dispose();
   }
@@ -49,6 +55,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
             inviteCode: widget.inviteCode,
             name: _nameController.text.trim(),
             email: _emailController.text.trim(),
+            password: _passwordController.text,
             phone: _phoneController.text.trim().isNotEmpty ? _phoneController.text.trim() : null,
             qualifications: _selectedQualifications.toList(),
             isEmailPublic: _isEmailPublic,
@@ -155,6 +162,69 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                       validator: (val) {
                         if (val == null || val.trim().isEmpty) return 'Please enter your email';
                         if (!val.contains('@')) return 'Please enter a valid email';
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Secure Password Field
+                    TextFormField(
+                      key: const Key('signup_password_input'),
+                      controller: _passwordController,
+                      obscureText: _obscurePassword,
+                      decoration: InputDecoration(
+                        labelText: 'Password *',
+                        helperText: 'At least 8 characters. Securely hashed.',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscurePassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                            size: 20,
+                          ),
+                          onPressed: () =>
+                              setState(() => _obscurePassword = !_obscurePassword),
+                        ),
+                      ),
+                      validator: (val) {
+                        if (val == null || val.isEmpty) {
+                          return 'Please enter a password';
+                        }
+                        if (val.length < 8) {
+                          return 'Password must be at least 8 characters';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 14),
+
+                    // Confirm Password Field
+                    TextFormField(
+                      key: const Key('signup_confirm_password_input'),
+                      controller: _confirmPasswordController,
+                      obscureText: _obscureConfirmPassword,
+                      decoration: InputDecoration(
+                        labelText: 'Confirm Password *',
+                        prefixIcon: const Icon(Icons.lock_clock_outlined),
+                        suffixIcon: IconButton(
+                          icon: Icon(
+                            _obscureConfirmPassword
+                                ? Icons.visibility_outlined
+                                : Icons.visibility_off_outlined,
+                            size: 20,
+                          ),
+                          onPressed: () => setState(
+                              () => _obscureConfirmPassword = !_obscureConfirmPassword),
+                        ),
+                      ),
+                      validator: (val) {
+                        if (val == null || val.isEmpty) {
+                          return 'Please confirm your password';
+                        }
+                        if (val != _passwordController.text) {
+                          return 'Passwords do not match';
+                        }
                         return null;
                       },
                     ),

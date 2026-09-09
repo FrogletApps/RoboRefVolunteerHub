@@ -21,3 +21,11 @@ final userEventSignupProvider =
   if (user == null) return null;
   return repo.getUserSignupForEvent(sku: sku, volunteerId: user.id);
 });
+
+final myVolunteerSignupsProvider =
+    FutureProvider<List<EventSignupModel>>((ref) async {
+  final repo = ref.watch(volunteerRepositoryProvider);
+  final user = ref.watch(currentVolunteerProvider);
+  if (user == null) return [];
+  return repo.getSignupsForVolunteer(user.id);
+});

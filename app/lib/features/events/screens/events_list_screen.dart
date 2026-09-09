@@ -111,34 +111,102 @@ class EventsListScreen extends ConsumerWidget {
 
           // User status greeting banner
           if (currentUser != null)
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              color: AppTheme.brandGreen.withValues(alpha: 0.08),
-              child: Row(
-                children: [
-                  const Icon(Icons.person, size: 16, color: AppTheme.brandGreen),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Signed in as ${currentUser.name} (${currentUser.qualifiedRoles.map((r) => r.label).join(', ')})',
-                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w500),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                  if (currentUser.isEventPartner)
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: AppTheme.epVerifiedGold,
-                        borderRadius: BorderRadius.circular(4),
+            InkWell(
+              onTap: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
+                );
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                color: AppTheme.brandGreen.withValues(alpha: 0.08),
+                child: Row(
+                  children: [
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor: AppTheme.brandGreen,
+                      child: Text(
+                        currentUser.name.isNotEmpty
+                            ? currentUser.name[0].toUpperCase()
+                            : 'V',
+                        style: const TextStyle(
+                          fontSize: 12,
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
-                      child: const Text(
-                        'EP MODE',
-                        style: TextStyle(fontSize: 9, color: Colors.white, fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Flexible(
+                                child: Text(
+                                  'Signed in as ${currentUser.name}',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (currentUser.isEventPartner) ...[
+                                const SizedBox(width: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 6, vertical: 1.5),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.epVerifiedGold,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: const Text(
+                                    'EP MODE',
+                                    style: TextStyle(
+                                      fontSize: 9,
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ],
+                          ),
+                          Text(
+                            'Alias: ${currentUser.forwardingAddress}',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: Colors.grey[700],
+                            ),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
                       ),
                     ),
-                ],
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                              builder: (_) => const ProfileScreen()),
+                        );
+                      },
+                      icon: const Icon(Icons.badge_outlined, size: 15),
+                      label: const Text(
+                        'View My Data',
+                        style: TextStyle(
+                            fontSize: 11, fontWeight: FontWeight.bold),
+                      ),
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
 
