@@ -162,7 +162,6 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
     final selectedProgram = ref.watch(selectedProgramFilterProvider);
     final selectedSignupFilter = ref.watch(selectedSignupFilterProvider);
     final searchQuery = ref.watch(eventSearchQueryProvider);
-    final currentUser = ref.watch(currentVolunteerProvider);
 
     final hasActiveFilters = selectedProgram != 'All' ||
         selectedSignupFilter != null ||
@@ -170,15 +169,51 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('UK VEX Events'),
+        title: const Text('RoboRef Volunteer Hub'),
         actions: [
           IconButton(
+            key: const Key('profile_button'),
             icon: const Icon(Icons.person_outline),
             tooltip: 'My Volunteer Profile',
             onPressed: () {
               Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const ProfileScreen()),
               );
+            },
+          ),
+          IconButton(
+            key: const Key('logout_button'),
+            icon: const Icon(Icons.logout),
+            tooltip: 'Log Out',
+            onPressed: () async {
+              final confirm = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  title: const Text('Log Out?'),
+                  content: const Text(
+                    'Are you sure you want to log out of RoboRef Volunteer Hub?',
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx, false),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () => Navigator.pop(ctx, true),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.red,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Log Out'),
+                    ),
+                  ],
+                ),
+              );
+
+              if (confirm == true && mounted) {
+                clearAllEventFilters(ref);
+                await ref.read(currentVolunteerProvider.notifier).logout();
+              }
             },
           ),
         ],
@@ -315,107 +350,6 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
               ],
             ),
           ),
-
-          // User status greeting banner
-          if (currentUser != null)
-            InkWell(
-              onTap: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const ProfileScreen()),
-                );
-              },
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                color: AppTheme.brandGreen.withValues(alpha: 0.08),
-                child: Row(
-                  children: [
-                    CircleAvatar(
-                      radius: 14,
-                      backgroundColor: AppTheme.brandGreen,
-                      child: Text(
-                        currentUser.name.isNotEmpty
-                            ? currentUser.name[0].toUpperCase()
-                            : 'V',
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            children: [
-                              Flexible(
-                                child: Text(
-                                  'Signed in as ${currentUser.name}',
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (currentUser.isEventPartner) ...[
-                                const SizedBox(width: 6),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 6, vertical: 1.5),
-                                  decoration: BoxDecoration(
-                                    color: AppTheme.epVerifiedGold,
-                                    borderRadius: BorderRadius.circular(4),
-                                  ),
-                                  child: const Text(
-                                    'EP MODE',
-                                    style: TextStyle(
-                                      fontSize: 9,
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.bold,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                          Text(
-                            'Alias: ${currentUser.forwardingAddress}',
-                            style: TextStyle(
-                              fontSize: 11,
-                              color: Colors.grey[700],
-                            ),
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () {
-                        Navigator.of(context).push(
-                          MaterialPageRoute(
-                              builder: (_) => const ProfileScreen()),
-                        );
-                      },
-                      icon: const Icon(Icons.badge_outlined, size: 15),
-                      label: const Text(
-                        'View My Data',
-                        style: TextStyle(
-                            fontSize: 11, fontWeight: FontWeight.bold),
-                      ),
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
 
           // Events List
           Expanded(

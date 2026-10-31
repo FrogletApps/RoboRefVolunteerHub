@@ -75,12 +75,27 @@ void main() {
     await tester.pumpAndSettle();
 
     // Verify user is now inside the authenticated events screen
-    expect(find.text('UK VEX Events'), findsOneWidget);
-    expect(find.textContaining('Signed in as Alex Turner'), findsOneWidget);
-    expect(find.text('View My Data'), findsOneWidget);
+    expect(find.widgetWithText(AppBar, 'RoboRef Volunteer Hub'), findsOneWidget);
+    expect(find.text('UK VEX Events'), findsNothing);
 
-    // Tap View My Data to see volunteer profile and personal registrations
-    await tester.tap(find.text('View My Data'));
+    // Verify "Signed in as..." bar (alias + View My Data button) is removed
+    expect(find.textContaining('Signed in as'), findsNothing);
+    expect(find.textContaining('Alias:'), findsNothing);
+    expect(find.text('View My Data'), findsNothing);
+
+    // Verify profile button and log out button to the right of the profile button
+    final profileButton = find.byKey(const Key('profile_button'));
+    final logoutButton = find.byKey(const Key('logout_button'));
+    expect(profileButton, findsOneWidget);
+    expect(logoutButton, findsOneWidget);
+
+    final profileRect = tester.getRect(profileButton);
+    final logoutRect = tester.getRect(logoutButton);
+    expect(logoutRect.left, greaterThanOrEqualTo(profileRect.right));
+    expect((logoutRect.center.dy - profileRect.center.dy).abs(), lessThan(2));
+
+    // Tap profile button to see volunteer profile and personal registrations
+    await tester.tap(profileButton);
     await tester.pumpAndSettle();
 
     // Verify profile screen with Alex's personal volunteer data is visible
@@ -88,5 +103,22 @@ void main() {
     expect(find.text('Alex Turner'), findsWidgets);
     expect(find.text('vol-alex102@volunteer.roboref.app'), findsOneWidget);
     expect(find.text('My Event Signups & Volunteering Data'), findsOneWidget);
+
+    // Navigate back to events screen and test logging out from AppBar
+    await tester.pageBack();
+    await tester.pumpAndSettle();
+    expect(find.widgetWithText(AppBar, 'RoboRef Volunteer Hub'), findsOneWidget);
+
+    await tester.tap(find.byKey(const Key('logout_button')));
+    await tester.pumpAndSettle();
+    expect(find.text('Log Out?'), findsOneWidget);
+
+    // Confirm log out
+    await tester.tap(find.widgetWithText(ElevatedButton, 'Log Out'));
+    await tester.pumpAndSettle();
+
+    // Verify returned to InviteGateScreen
+    expect(find.text('Invite-Only Access'), findsOneWidget);
+    expect(find.text('Volunteer Log In'), findsOneWidget);
   });
 }
