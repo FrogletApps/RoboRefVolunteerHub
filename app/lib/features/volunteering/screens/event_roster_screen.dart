@@ -521,6 +521,7 @@ class _EventRosterScreenState extends ConsumerState<EventRosterScreen> {
                             await repo.toggleEpVerification(signupId: item.id);
                             ref.invalidate(eventSignupsProvider(widget.event.sku));
                             ref.invalidate(userEventSignupProvider(widget.event.sku));
+                            ref.invalidate(myVolunteerSignupsProvider);
                           },
                         );
                       },

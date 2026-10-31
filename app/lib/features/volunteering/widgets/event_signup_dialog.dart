@@ -88,6 +88,7 @@ class _EventSignupDialogState extends ConsumerState<EventSignupDialog> {
       // Invalidate queries so UI updates immediately
       ref.invalidate(eventSignupsProvider(widget.sku));
       ref.invalidate(userEventSignupProvider(widget.sku));
+      ref.invalidate(myVolunteerSignupsProvider);
 
       if (mounted) {
         Navigator.of(context).pop(true);
@@ -147,6 +148,7 @@ class _EventSignupDialogState extends ConsumerState<EventSignupDialog> {
 
       ref.invalidate(eventSignupsProvider(widget.sku));
       ref.invalidate(userEventSignupProvider(widget.sku));
+      ref.invalidate(myVolunteerSignupsProvider);
 
       if (mounted) {
         Navigator.of(context).pop(true);

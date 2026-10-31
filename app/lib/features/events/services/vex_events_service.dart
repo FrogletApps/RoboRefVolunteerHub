@@ -17,11 +17,13 @@ class VexEventsService {
       return [];
     }
     switch (program.toUpperCase()) {
+      case 'VEX V5':
       case 'V5RC':
       case 'VRC':
       case 'VE-V5':
       case 'V5':
         return [1];
+      case 'VEX IQ':
       case 'VIQRC':
       case 'VIQC':
       case 'VE-IQ':
@@ -47,19 +49,120 @@ class VexEventsService {
       return [204, 203, 205, 206];
     }
     switch (program.toUpperCase()) {
+      case 'VEX V5':
       case 'V5RC':
       case 'VRC':
+      case 'VE-V5':
+      case 'V5':
         return [204];
+      case 'VEX IQ':
       case 'VIQRC':
+      case 'VIQC':
+      case 'VE-IQ':
       case 'IQ':
         return [203];
       case 'VEX U':
+      case 'VURC':
+      case 'VE-U':
+      case 'U':
         return [205];
       case 'VEX AI':
+      case 'VAIRC':
+      case 'AI':
         return [206];
       default:
         return [204, 203];
     }
+  }
+
+  bool _matchesProgram(EventModel event, String? program) {
+    if (program == null || program.isEmpty || program == 'All') {
+      return true;
+    }
+    final filterIds = _getProgramIds(program);
+    final eventIds = _getProgramIds(event.program);
+    if (filterIds.isNotEmpty && eventIds.isNotEmpty) {
+      return filterIds.any(eventIds.contains);
+    }
+    return event.program.toUpperCase() == program.toUpperCase();
+  }
+
+  bool _matchesQuery(EventModel e, String? query) {
+    if (query == null || query.trim().isEmpty) return true;
+    final q = query.trim().toLowerCase();
+    final matchesName = e.name.toLowerCase().contains(q);
+    final matchesSku = e.sku.toLowerCase().contains(q);
+    final matchesCity = e.city?.toLowerCase().contains(q) ?? false;
+    final matchesVenue = e.venue?.toLowerCase().contains(q) ?? false;
+    return matchesName || matchesSku || matchesCity || matchesVenue;
+  }
+
+  /// Fetch events matching a set of SKUs (used for signup/status filters)
+  Future<List<EventModel>> searchEventsBySkus({
+    required Set<String> skus,
+    String? program,
+    String? query,
+  }) async {
+    final normalizedSkus = skus
+        .map((s) => s.trim().toUpperCase())
+        .where((s) => s.isNotEmpty)
+        .toSet();
+    if (normalizedSkus.isEmpty) return [];
+
+    final queryParams = <String, List<String>>{
+      'per_page': [
+        normalizedSkus.length < 40 ? '40' : normalizedSkus.length.toString(),
+      ],
+      'sku[]': normalizedSkus.toList(),
+    };
+
+    final candidateUrls = [
+      Uri.parse('$proxyBaseUrl/events').replace(queryParameters: queryParams),
+      Uri.parse('$vexBaseUrl/events').replace(queryParameters: queryParams),
+    ];
+
+    final resultsBySku = <String, EventModel>{};
+
+    for (final uri in candidateUrls) {
+      try {
+        final response = await _client.get(
+          uri,
+          headers: {
+            'Accept': 'application/json',
+            'User-Agent': 'RoboRefVolunteerHub/1.0',
+          },
+        ).timeout(const Duration(seconds: 8));
+
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          if (data['data'] is List) {
+            for (final raw in data['data'] as List) {
+              final event = EventModel.fromJson(raw as Map<String, dynamic>);
+              resultsBySku[event.sku.trim().toUpperCase()] = event;
+            }
+            break;
+          }
+        }
+      } catch (e) {
+        debugPrint('Failed to query $uri: $e');
+      }
+    }
+
+    if (resultsBySku.length < normalizedSkus.length) {
+      for (final fallback in _getFallbackUkEvents()) {
+        final key = fallback.sku.trim().toUpperCase();
+        if (normalizedSkus.contains(key) && !resultsBySku.containsKey(key)) {
+          resultsBySku[key] = fallback;
+        }
+      }
+    }
+
+    return resultsBySku.values
+        .where((e) =>
+            normalizedSkus.contains(e.sku.trim().toUpperCase()) &&
+            _matchesProgram(e, program) &&
+            _matchesQuery(e, query))
+        .toList();
   }
 
   /// Search UK VEX events from official VEX Events API or RoboRef proxy
@@ -197,18 +300,11 @@ class VexEventsService {
     ];
 
     return events.where((e) {
-      if (program != null && program != 'All' && e.program != program) {
+      if (!_matchesProgram(e, program)) {
         return false;
       }
-      if (query != null && query.trim().isNotEmpty) {
-        final q = query.trim().toLowerCase();
-        final matchesName = e.name.toLowerCase().contains(q);
-        final matchesSku = e.sku.toLowerCase().contains(q);
-        final matchesCity = e.city?.toLowerCase().contains(q) ?? false;
-        final matchesVenue = e.venue?.toLowerCase().contains(q) ?? false;
-        if (!matchesName && !matchesSku && !matchesCity && !matchesVenue) {
-          return false;
-        }
+      if (!_matchesQuery(e, query)) {
+        return false;
       }
       return true;
     }).toList();

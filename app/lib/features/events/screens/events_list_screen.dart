@@ -11,8 +11,11 @@ import '../../volunteering/screens/event_roster_screen.dart';
 import '../../profile/screens/profile_screen.dart';
 import '../../auth_invites/state/auth_provider.dart';
 
-class EventsListScreen extends ConsumerWidget {
+class EventsListScreen extends ConsumerStatefulWidget {
   const EventsListScreen({super.key});
+
+  /// Width threshold below which the three filter groups stack onto three separate lines
+  static const double kCompactFilterBreakpoint = 780;
 
   static String formatDateRange(String start, String end) {
     try {
@@ -29,10 +32,141 @@ class EventsListScreen extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<EventsListScreen> createState() => _EventsListScreenState();
+}
+
+class _EventsListScreenState extends ConsumerState<EventsListScreen> {
+  late final TextEditingController _searchController;
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController =
+        TextEditingController(text: ref.read(eventSearchQueryProvider));
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Color _getSignupFilterColor(String option) {
+    if (option == kConfirmedFilter) return AppTheme.statusConfirmed;
+    if (option == kAvailableFilter) return AppTheme.statusAvailable;
+    return AppTheme.brandGreen;
+  }
+
+  List<Widget> _buildEventTypeChips(String selectedProgram) {
+    return [
+      for (var i = 0; i < kEventTypeFilterOptions.length; i++)
+        Padding(
+          padding: EdgeInsets.only(
+            right: i < kEventTypeFilterOptions.length - 1 ? 8 : 0,
+          ),
+          child: Builder(
+            builder: (context) {
+              final prog = kEventTypeFilterOptions[i];
+              final isSelected = selectedProgram == prog;
+              return FilterChip(
+                label: Text(prog),
+                selected: isSelected,
+                selectedColor: AppTheme.brandGreen.withValues(alpha: 0.15),
+                checkmarkColor: AppTheme.brandGreen,
+                labelStyle: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? AppTheme.brandGreen : null,
+                ),
+                onSelected: (val) {
+                  ref.read(selectedProgramFilterProvider.notifier).state =
+                      val ? prog : 'All';
+                },
+              );
+            },
+          ),
+        ),
+    ];
+  }
+
+  List<Widget> _buildSignupStatusChips(String? selectedSignupFilter) {
+    return [
+      for (var i = 0; i < kSignupStatusFilterOptions.length; i++)
+        Padding(
+          padding: EdgeInsets.only(
+            right: i < kSignupStatusFilterOptions.length - 1 ? 8 : 0,
+          ),
+          child: Builder(
+            builder: (context) {
+              final option = kSignupStatusFilterOptions[i];
+              final isSelected = selectedSignupFilter == option;
+              final accent = _getSignupFilterColor(option);
+              return FilterChip(
+                label: Text(option),
+                selected: isSelected,
+                selectedColor: accent.withValues(alpha: 0.15),
+                checkmarkColor: accent,
+                labelStyle: TextStyle(
+                  fontSize: 12,
+                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  color: isSelected ? accent : null,
+                ),
+                onSelected: (val) {
+                  ref.read(selectedSignupFilterProvider.notifier).state =
+                      val ? option : null;
+                },
+              );
+            },
+          ),
+        ),
+    ];
+  }
+
+  Widget _buildClearButton(bool hasActiveFilters) {
+    final activeColor = Colors.red.shade700;
+    final idleColor = Colors.grey[600];
+    return TextButton.icon(
+      key: const Key('clear_filters_button'),
+      onPressed: () {
+        clearAllEventFilters(ref);
+      },
+      icon: Icon(
+        Icons.filter_alt_off_outlined,
+        size: 16,
+        color: hasActiveFilters ? activeColor : idleColor,
+      ),
+      label: Text(
+        'Clear',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: hasActiveFilters ? FontWeight.bold : FontWeight.w500,
+          color: hasActiveFilters ? activeColor : idleColor,
+        ),
+      ),
+      style: TextButton.styleFrom(
+        visualDensity: VisualDensity.compact,
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ref.listen<String>(eventSearchQueryProvider, (_, next) {
+      if (_searchController.text != next) {
+        _searchController.text = next;
+      }
+    });
+
     final eventsAsync = ref.watch(ukEventsListProvider);
     final selectedProgram = ref.watch(selectedProgramFilterProvider);
+    final selectedSignupFilter = ref.watch(selectedSignupFilterProvider);
+    final searchQuery = ref.watch(eventSearchQueryProvider);
     final currentUser = ref.watch(currentVolunteerProvider);
+
+    final hasActiveFilters = selectedProgram != 'All' ||
+        selectedSignupFilter != null ||
+        searchQuery.trim().isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(
@@ -61,49 +195,122 @@ class EventsListScreen extends ConsumerWidget {
             child: Column(
               children: [
                 TextField(
+                  controller: _searchController,
                   decoration: InputDecoration(
                     hintText: 'Search UK tournaments, cities, or SKUs...',
                     prefixIcon: const Icon(Icons.search, size: 20),
-                    suffixIcon: ref.watch(eventSearchQueryProvider).isNotEmpty
+                    suffixIcon: searchQuery.isNotEmpty
                         ? IconButton(
                             icon: const Icon(Icons.clear, size: 18),
-                            onPressed: () =>
-                                ref.read(eventSearchQueryProvider.notifier).state = '',
+                            onPressed: () => ref
+                                .read(eventSearchQueryProvider.notifier)
+                                .state = '',
                           )
                         : null,
-                    contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    contentPadding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   ),
                   onChanged: (val) {
                     ref.read(eventSearchQueryProvider.notifier).state = val;
                   },
                 ),
                 const SizedBox(height: 10),
-                // Program Filter Chips
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: ['All', 'V5RC', 'VIQRC', 'VEX U'].map((prog) {
-                      final isSelected = selectedProgram == prog;
-                      return Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: FilterChip(
-                          label: Text(prog),
-                          selected: isSelected,
-                          selectedColor: AppTheme.brandGreen.withValues(alpha: 0.15),
-                          checkmarkColor: AppTheme.brandGreen,
-                          labelStyle: TextStyle(
-                            fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                            color: isSelected ? AppTheme.brandGreen : null,
+                // Responsive Event Filter Groups (1 horizontal row when wide; 3 separate lines when narrow)
+                LayoutBuilder(
+                  builder: (context, constraints) {
+                    final eventTypeChips =
+                        _buildEventTypeChips(selectedProgram);
+                    final signupStatusChips =
+                        _buildSignupStatusChips(selectedSignupFilter);
+                    final clearButton = _buildClearButton(hasActiveFilters);
+
+                    if (constraints.maxWidth <
+                        EventsListScreen.kCompactFilterBreakpoint) {
+                      return Column(
+                        key: const Key('filters_three_line_layout'),
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          Center(
+                            key: const Key('filter_group_event_types'),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: eventTypeChips,
+                              ),
+                            ),
                           ),
-                          onSelected: (val) {
-                            ref.read(selectedProgramFilterProvider.notifier).state =
-                                val ? prog : 'All';
-                          },
-                        ),
+                          Divider(
+                            key: const Key(
+                                'event_filters_horizontal_divider_1'),
+                            height: 16,
+                            thickness: 1,
+                            color: Colors.grey.shade300,
+                          ),
+                          Center(
+                            key: const Key('filter_group_signup_status'),
+                            child: SingleChildScrollView(
+                              scrollDirection: Axis.horizontal,
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: signupStatusChips,
+                              ),
+                            ),
+                          ),
+                          Divider(
+                            key: const Key(
+                                'event_filters_horizontal_divider_2'),
+                            height: 14,
+                            thickness: 1,
+                            color: Colors.grey.shade300,
+                          ),
+                          Center(
+                            key: const Key('filter_group_clear'),
+                            child: clearButton,
+                          ),
+                        ],
                       );
-                    }).toList(),
-                  ),
+                    }
+
+                    return Row(
+                      key: const Key('filters_single_line_layout'),
+                      children: [
+                        Expanded(
+                          child: SingleChildScrollView(
+                            scrollDirection: Axis.horizontal,
+                            child: Row(
+                              children: [
+                                Row(
+                                  key: const Key('filter_group_event_types'),
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: eventTypeChips,
+                                ),
+                                Container(
+                                  key: const Key(
+                                      'event_filters_vertical_divider'),
+                                  width: 1,
+                                  height: 24,
+                                  margin: const EdgeInsets.symmetric(
+                                      horizontal: 12),
+                                  color: Colors.grey.shade300,
+                                ),
+                                Row(
+                                  key: const Key('filter_group_signup_status'),
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: signupStatusChips,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        KeyedSubtree(
+                          key: const Key('filter_group_clear'),
+                          child: clearButton,
+                        ),
+                      ],
+                    );
+                  },
                 ),
               ],
             ),
@@ -225,7 +432,12 @@ class EventsListScreen extends ConsumerWidget {
                       Text('Error loading UK events: $err'),
                       const SizedBox(height: 12),
                       ElevatedButton(
-                        onPressed: () => ref.refresh(ukEventsListProvider),
+                        onPressed: () {
+                          if (selectedSignupFilter != null) {
+                            ref.invalidate(myVolunteerSignupsProvider);
+                          }
+                          return ref.refresh(ukEventsListProvider);
+                        },
                         child: const Text('Retry'),
                       ),
                     ],
@@ -234,6 +446,30 @@ class EventsListScreen extends ConsumerWidget {
               ),
               data: (events) {
                 if (events.isEmpty) {
+                  final hasSearchQuery = searchQuery.trim().isNotEmpty;
+                  final isAllPrograms = selectedProgram == 'All';
+                  String emptyTitle = 'No UK events match your filters.';
+                  String emptySubtitle =
+                      'Tap Clear to reset filters or search with another keyword.';
+
+                  if (!hasSearchQuery &&
+                      isAllPrograms &&
+                      selectedSignupFilter != null) {
+                    if (selectedSignupFilter == kConfirmedFilter) {
+                      emptyTitle = 'You have no confirmed events yet.';
+                      emptySubtitle =
+                          'Confirm your attendance on an event or tap Clear to view all events.';
+                    } else if (selectedSignupFilter == kAvailableFilter) {
+                      emptyTitle = 'You have no events marked as Available.';
+                      emptySubtitle =
+                          'Mark yourself as Available on an event or tap Clear to view all events.';
+                    } else {
+                      emptyTitle = 'You are not signed up for any events yet.';
+                      emptySubtitle =
+                          'Select an event to register as Available or Confirmed, or tap Clear to view all events.';
+                    }
+                  }
+
                   return Center(
                     child: Padding(
                       padding: const EdgeInsets.all(32),
@@ -242,14 +478,17 @@ class EventsListScreen extends ConsumerWidget {
                         children: [
                           Icon(Icons.event_busy, size: 48, color: Colors.grey[400]),
                           const SizedBox(height: 12),
-                          const Text(
-                            'No UK events match your filters.',
-                            style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+                          Text(
+                            emptyTitle,
+                            style: const TextStyle(
+                                fontSize: 15, fontWeight: FontWeight.bold),
+                            textAlign: TextAlign.center,
                           ),
                           const SizedBox(height: 4),
                           Text(
-                            'Try resetting filters or searching with another keyword.',
+                            emptySubtitle,
                             style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+                            textAlign: TextAlign.center,
                           ),
                         ],
                       ),
@@ -258,7 +497,12 @@ class EventsListScreen extends ConsumerWidget {
                 }
 
                 return RefreshIndicator(
-                  onRefresh: () async => ref.refresh(ukEventsListProvider),
+                  onRefresh: () async {
+                    if (selectedSignupFilter != null) {
+                      ref.invalidate(myVolunteerSignupsProvider);
+                    }
+                    return ref.refresh(ukEventsListProvider.future);
+                  },
                   child: ListView.separated(
                     padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
                     itemCount: events.length,
@@ -388,29 +632,45 @@ class _EventCard extends ConsumerWidget {
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  signupsAsync.when(
-                    data: (signups) {
-                      final confirmedCount = signups.where((s) => s.isConfirmed).length;
-                      final availableCount = signups.where((s) => s.isAvailable).length;
-                      return Row(
-                        children: [
-                          Icon(Icons.people_outline, size: 16, color: Colors.grey[700]),
-                          const SizedBox(width: 6),
-                          Text(
-                            '$confirmedCount Confirmed • $availableCount Available',
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: confirmedCount > 0 ? AppTheme.statusConfirmed : Colors.grey[700],
+                  Expanded(
+                    child: signupsAsync.when(
+                      data: (signups) {
+                        final confirmedCount =
+                            signups.where((s) => s.isConfirmed).length;
+                        final availableCount =
+                            signups.where((s) => s.isAvailable).length;
+                        return Row(
+                          children: [
+                            Icon(Icons.people_outline,
+                                size: 16, color: Colors.grey[700]),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                '$confirmedCount Confirmed • $availableCount Available',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: confirmedCount > 0
+                                      ? AppTheme.statusConfirmed
+                                      : Colors.grey[700],
+                                ),
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
-                        ],
-                      );
-                    },
-                    loading: () => const Text('Loading volunteers...', style: TextStyle(fontSize: 11)),
-                    error: (_, __) => const SizedBox(),
+                          ],
+                        );
+                      },
+                      loading: () => const Text(
+                        'Loading volunteers...',
+                        style: TextStyle(fontSize: 11),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      error: (_, __) => const SizedBox(),
+                    ),
                   ),
+                  const SizedBox(width: 8),
                   Row(
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
                         'View Roster',
@@ -421,7 +681,8 @@ class _EventCard extends ConsumerWidget {
                         ),
                       ),
                       const SizedBox(width: 4),
-                      Icon(Icons.arrow_forward_ios, size: 12, color: AppTheme.brandGreen),
+                      Icon(Icons.arrow_forward_ios,
+                          size: 12, color: AppTheme.brandGreen),
                     ],
                   ),
                 ],

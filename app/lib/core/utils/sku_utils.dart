@@ -79,10 +79,12 @@ String getSkuProgram(String? sku) {
 /// Extract program brand color
 Color getProgramColor(String program) {
   switch (program.toUpperCase()) {
+    case 'VEX V5':
     case 'V5RC':
     case 'VRC':
     case 'V5':
       return const Color(0xFFC8102E); // V5 Crimson
+    case 'VEX IQ':
     case 'VIQRC':
     case 'VIQC':
     case 'IQ':

@@ -559,6 +559,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                                                   myVolunteerSignupsProvider);
                                               ref.invalidate(
                                                   eventSignupsProvider(s.sku));
+                                              ref.invalidate(
+                                                  userEventSignupProvider(
+                                                      s.sku));
                                             }
                                           },
                                           icon: const Icon(Icons.cancel_outlined,
