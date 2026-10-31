@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/constants/roles.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../auth_invites/state/auth_provider.dart';
-import '../../volunteering/state/volunteering_provider.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({super.key});
@@ -18,10 +17,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   final _phoneController = TextEditingController();
 
   late Set<String> _qualifications;
-  late bool _isPhonePublic;
-  late bool _isEmailPublic;
-  late bool _forwardingEnabled;
-  late bool _isEventPartner;
+  final bool _isPhonePublic = false;
+  final bool _isEmailPublic = false;
+  final bool _forwardingEnabled = false;
+  final bool _isEventPartner = false;
 
   @override
   void initState() {
@@ -31,10 +30,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     _emailController.text = user?.email ?? '';
     _phoneController.text = user?.phone ?? '';
     _qualifications = Set<String>.from(user?.qualifications ?? []);
-    _isPhonePublic = user?.isPhonePublic ?? false;
-    _isEmailPublic = user?.isEmailPublic ?? false;
-    _forwardingEnabled = user?.forwardingEnabled ?? true;
-    _isEventPartner = user?.isEventPartner ?? false;
   }
 
   @override
@@ -311,7 +306,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             style: TextStyle(fontSize: 12),
                           ),
                           value: _forwardingEnabled,
-                          onChanged: (val) => setState(() => _forwardingEnabled = val),
+                          onChanged: null,
                         ),
                         const Divider(),
                         SwitchListTile(
@@ -322,7 +317,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             style: TextStyle(fontSize: 12),
                           ),
                           value: _isPhonePublic,
-                          onChanged: (val) => setState(() => _isPhonePublic = val),
+                          onChanged: null,
                         ),
                         const Divider(),
                         SwitchListTile(
@@ -333,7 +328,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             style: TextStyle(fontSize: 12),
                           ),
                           value: _isEmailPublic,
-                          onChanged: (val) => setState(() => _isEmailPublic = val),
+                          onChanged: null,
                         ),
                         const Divider(),
                         SwitchListTile(
@@ -344,246 +339,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                             style: TextStyle(fontSize: 12),
                           ),
                           value: _isEventPartner,
-                          onChanged: (val) => setState(() => _isEventPartner = val),
+                          onChanged: null,
                         ),
                       ],
                     ),
                   ),
-                ),
-                const SizedBox(height: 24),
-
-                // My Event Signups & Volunteering Data
-                const Text(
-                  'My Event Signups & Volunteering Data',
-                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 6),
-                Text(
-                  'Overview of tournaments where you have volunteered and your attendance status.',
-                  style: TextStyle(fontSize: 12, color: Colors.grey[600]),
-                ),
-                const SizedBox(height: 10),
-
-                Consumer(
-                  builder: (context, ref, _) {
-                    final mySignupsAsync = ref.watch(myVolunteerSignupsProvider);
-                    return mySignupsAsync.when(
-                      loading: () => const Padding(
-                        padding: EdgeInsets.all(20),
-                        child: Center(child: CircularProgressIndicator()),
-                      ),
-                      error: (err, _) => Text('Error loading signups: $err'),
-                      data: (signups) {
-                        if (signups.isEmpty) {
-                          return Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(20),
-                              child: Column(
-                                children: [
-                                  Icon(Icons.event_available_outlined,
-                                      size: 38, color: Colors.grey[400]),
-                                  const SizedBox(height: 8),
-                                  const Text(
-                                    'No event signups yet',
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.bold, fontSize: 14),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text(
-                                    'Select tournaments from the UK Events tab to register as Available or Confirmed.',
-                                    textAlign: TextAlign.center,
-                                    style: TextStyle(
-                                        fontSize: 12, color: Colors.grey[600]),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          );
-                        }
-
-                        return Column(
-                          children: signups.map((s) {
-                            return Card(
-                              margin: const EdgeInsets.only(bottom: 8),
-                              child: Padding(
-                                padding: const EdgeInsets.all(14),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Text(
-                                          s.sku,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.bold,
-                                            fontFamily: 'monospace',
-                                            fontSize: 13,
-                                          ),
-                                        ),
-                                        const Spacer(),
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 3),
-                                          decoration: BoxDecoration(
-                                            color: s.isConfirmed
-                                                ? AppTheme.statusConfirmed
-                                                    .withValues(alpha: 0.15)
-                                                : AppTheme.statusAvailable
-                                                    .withValues(alpha: 0.15),
-                                            borderRadius:
-                                                BorderRadius.circular(6),
-                                          ),
-                                          child: Text(
-                                            s.isConfirmed
-                                                ? 'Confirmed'
-                                                : 'Available',
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              fontWeight: FontWeight.bold,
-                                              color: s.isConfirmed
-                                                  ? AppTheme.statusConfirmed
-                                                  : AppTheme.statusAvailable,
-                                            ),
-                                          ),
-                                        ),
-                                        if (s.epVerified) ...[
-                                          const SizedBox(width: 6),
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 6, vertical: 3),
-                                            decoration: BoxDecoration(
-                                              color: AppTheme.epVerifiedGold
-                                                  .withValues(alpha: 0.15),
-                                              borderRadius:
-                                                  BorderRadius.circular(6),
-                                            ),
-                                            child: const Row(
-                                              mainAxisSize: MainAxisSize.min,
-                                              children: [
-                                                Icon(Icons.verified,
-                                                    size: 13,
-                                                    color:
-                                                        AppTheme.epVerifiedGold),
-                                                SizedBox(width: 3),
-                                                Text(
-                                                  'EP Verified',
-                                                  style: TextStyle(
-                                                    fontSize: 10,
-                                                    fontWeight: FontWeight.bold,
-                                                    color:
-                                                        AppTheme.epVerifiedGold,
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 6,
-                                      runSpacing: 4,
-                                      children: s.roleEnums.map((r) {
-                                        return Chip(
-                                          visualDensity: VisualDensity.compact,
-                                          avatar: Icon(r.icon,
-                                              size: 14, color: r.color),
-                                          label: Text(
-                                            r.label,
-                                            style: const TextStyle(fontSize: 11),
-                                          ),
-                                          backgroundColor:
-                                              r.color.withValues(alpha: 0.08),
-                                          side: BorderSide(
-                                              color: r.color
-                                                  .withValues(alpha: 0.3)),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    if (s.notes != null && s.notes!.isNotEmpty) ...[
-                                      const SizedBox(height: 6),
-                                      Text(
-                                        'Note: ${s.notes}',
-                                        style: TextStyle(
-                                            fontSize: 11,
-                                            fontStyle: FontStyle.italic,
-                                            color: Colors.grey[700]),
-                                      ),
-                                    ],
-                                    const SizedBox(height: 10),
-                                    Row(
-                                      mainAxisAlignment: MainAxisAlignment.end,
-                                      children: [
-                                        TextButton.icon(
-                                          onPressed: () async {
-                                            final confirm =
-                                                await showDialog<bool>(
-                                              context: context,
-                                              builder: (ctx) => AlertDialog(
-                                                title: const Text(
-                                                    'Withdraw from Event?'),
-                                                content: Text(
-                                                    'Withdraw your registration for tournament ${s.sku}?'),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            ctx, false),
-                                                    child: const Text('Cancel'),
-                                                  ),
-                                                  ElevatedButton(
-                                                    onPressed: () =>
-                                                        Navigator.pop(
-                                                            ctx, true),
-                                                    style: ElevatedButton
-                                                        .styleFrom(
-                                                      backgroundColor:
-                                                          Colors.red,
-                                                    ),
-                                                    child: const Text(
-                                                        'Withdraw'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                            if (confirm == true) {
-                                              await ref
-                                                  .read(
-                                                      volunteerRepositoryProvider)
-                                                  .withdrawSignup(
-                                                    sku: s.sku,
-                                                    volunteerId: user.id,
-                                                  );
-                                              ref.invalidate(
-                                                  myVolunteerSignupsProvider);
-                                              ref.invalidate(
-                                                  eventSignupsProvider(s.sku));
-                                              ref.invalidate(
-                                                  userEventSignupProvider(
-                                                      s.sku));
-                                            }
-                                          },
-                                          icon: const Icon(Icons.cancel_outlined,
-                                              size: 16, color: Colors.red),
-                                          label: const Text(
-                                            'Withdraw',
-                                            style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.red),
-                                          ),
-                                        ),
-                                      ],
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            );
-                          }).toList(),
-                        );
-                      },
-                    );
-                  },
                 ),
                 const SizedBox(height: 28),
 

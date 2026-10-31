@@ -38,7 +38,7 @@ class CurrentVolunteerNotifier extends StateNotifier<VolunteerModel?> {
     List<String> qualifications = const [],
     bool isEmailPublic = false,
     bool isPhonePublic = false,
-    bool forwardingEnabled = true,
+    bool forwardingEnabled = false,
   }) async {
     final volunteer = await _authService.signup(
       inviteCode: inviteCode,
@@ -56,8 +56,9 @@ class CurrentVolunteerNotifier extends StateNotifier<VolunteerModel?> {
   }
 
   Future<void> updateProfile(VolunteerModel updated) async {
-    await _authService.updateProfile(updated);
-    state = updated;
+    final sanitized = updated.withDisabledPrivacyAndEpSettings();
+    await _authService.updateProfile(sanitized);
+    state = sanitized;
   }
 
   Future<void> logout() async {

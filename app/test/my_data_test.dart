@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:roboref_volunteer_hub/features/profile/models/volunteer_model.dart';
@@ -64,6 +65,46 @@ void main() {
 
       userSignups = await repository.getSignupsForVolunteer(volunteer.id);
       expect(userSignups, isEmpty);
+    });
+
+    test('Previously persisted signup volunteer profiles have privacy & EP settings reset to off',
+        () async {
+      SharedPreferences.setMockInitialValues({
+        'event_volunteer_signups_v1': jsonEncode([
+          {
+            'id': 'legacy-signup-1',
+            'sku': 'RE-V5RC-26-9102',
+            'volunteerId': 'vol-legacy',
+            'volunteerName': 'Legacy Volunteer',
+            'status': 'confirmed',
+            'epVerified': false,
+            'offeredRoles': ['ref'],
+            'updatedAt': '2026-09-01T00:00:00.000Z',
+            'volunteer': {
+              'id': 'vol-legacy',
+              'name': 'Legacy Volunteer',
+              'email': 'legacy@example.org',
+              'qualifications': ['ref'],
+              'isEmailPublic': true,
+              'isPhonePublic': true,
+              'forwardingEnabled': true,
+              'forwardingAddress': 'vol-legacy01@volunteer.roboref.app',
+              'isEventPartner': true,
+            },
+          },
+        ]),
+      });
+
+      final legacyPrefs = await SharedPreferences.getInstance();
+      final legacyRepo = VolunteerRepository(legacyPrefs);
+
+      final signups = await legacyRepo.getSignupsForEvent('RE-V5RC-26-9102');
+      expect(signups.length, equals(1));
+      final vol = signups.first.volunteer!;
+      expect(vol.isEmailPublic, isFalse);
+      expect(vol.isPhonePublic, isFalse);
+      expect(vol.forwardingEnabled, isFalse);
+      expect(vol.isEventPartner, isFalse);
     });
   });
 }

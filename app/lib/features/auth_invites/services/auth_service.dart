@@ -13,7 +13,60 @@ class AuthService {
   static const String _inviteClaimedKey = 'claimed_invite_code';
   static const String _accountsKey = 'registered_volunteer_accounts_v1';
 
-  AuthService(this._prefs);
+  AuthService(this._prefs) {
+    _sanitizeStoredUsers();
+  }
+
+  static bool _hasEnabledPrivacyOrEpInJson(Map<String, dynamic>? map) {
+    if (map == null) return false;
+    return map['isEmailPublic'] == true ||
+        map['isPhonePublic'] == true ||
+        map['forwardingEnabled'] == true ||
+        map['isEventPartner'] == true;
+  }
+
+  /// Ensures any previously stored session or registered user accounts have
+  /// all Contact Privacy, Email Forwarding, and EP Mode settings turned off.
+  void _sanitizeStoredUsers() {
+    final rawUser = _prefs.getString(_userKey);
+    if (rawUser != null && rawUser.isNotEmpty) {
+      try {
+        final map = jsonDecode(rawUser) as Map<String, dynamic>;
+        final user = VolunteerModel.fromJson(map);
+        final sanitized = user.withDisabledPrivacyAndEpSettings();
+        if (_hasEnabledPrivacyOrEpInJson(map) || !identical(user, sanitized)) {
+          _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
+        }
+      } catch (e) {
+        debugPrint('Error sanitizing active volunteer profile: $e');
+      }
+    }
+
+    final rawAccounts = _prefs.getString(_accountsKey);
+    if (rawAccounts != null && rawAccounts.isNotEmpty) {
+      try {
+        final list = jsonDecode(rawAccounts) as List<dynamic>;
+        var changed = false;
+        final accounts = list.map((e) {
+          final accMap = e as Map<String, dynamic>;
+          final profileMap = accMap['profile'] as Map<String, dynamic>?;
+          final acc = UserAccount.fromJson(accMap);
+          final sanitizedProfile = acc.profile.withDisabledPrivacyAndEpSettings();
+          if (_hasEnabledPrivacyOrEpInJson(profileMap) ||
+              !identical(acc.profile, sanitizedProfile)) {
+            changed = true;
+            return acc.copyWith(profile: sanitizedProfile);
+          }
+          return acc;
+        }).toList();
+        if (changed) {
+          _saveAccounts(accounts);
+        }
+      } catch (e) {
+        debugPrint('Error sanitizing stored accounts: $e');
+      }
+    }
+  }
 
   /// Validates whether an invite code is valid from the static admin list
   bool validateInviteCode(String code) {
@@ -27,7 +80,12 @@ class AuthService {
     if (raw == null || raw.isEmpty) return null;
     try {
       final map = jsonDecode(raw) as Map<String, dynamic>;
-      return VolunteerModel.fromJson(map);
+      final volunteer = VolunteerModel.fromJson(map);
+      final sanitized = volunteer.withDisabledPrivacyAndEpSettings();
+      if (_hasEnabledPrivacyOrEpInJson(map) || !identical(volunteer, sanitized)) {
+        _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
+      }
+      return sanitized;
     } catch (e) {
       debugPrint('Error decoding volunteer profile: $e');
       return null;
@@ -44,9 +102,23 @@ class AuthService {
     }
     try {
       final list = jsonDecode(raw) as List<dynamic>;
-      return list
-          .map((e) => UserAccount.fromJson(e as Map<String, dynamic>))
-          .toList();
+      var changed = false;
+      final accounts = list.map((e) {
+        final accMap = e as Map<String, dynamic>;
+        final profileMap = accMap['profile'] as Map<String, dynamic>?;
+        final acc = UserAccount.fromJson(accMap);
+        final sanitizedProfile = acc.profile.withDisabledPrivacyAndEpSettings();
+        if (_hasEnabledPrivacyOrEpInJson(profileMap) ||
+            !identical(acc.profile, sanitizedProfile)) {
+          changed = true;
+          return acc.copyWith(profile: sanitizedProfile);
+        }
+        return acc;
+      }).toList();
+      if (changed) {
+        _saveAccounts(accounts);
+      }
+      return accounts;
     } catch (e) {
       debugPrint('Error decoding accounts: $e');
       return _getPreseededDemoAccounts();
@@ -80,7 +152,7 @@ class AuthService {
     List<String> qualifications = const [],
     bool isEmailPublic = false,
     bool isPhonePublic = false,
-    bool forwardingEnabled = true,
+    bool forwardingEnabled = false,
   }) async {
     // 1. Enforce invite code access restriction
     if (!validateInviteCode(inviteCode)) {
@@ -109,7 +181,6 @@ class AuthService {
     final passwordHash = CryptoUtils.hashPassword(password);
 
     final id = const Uuid().v4();
-    final isEp = inviteCode.trim().toUpperCase() == 'UK-EP-VERIFIED';
 
     final volunteer = VolunteerModel(
       id: id,
@@ -117,11 +188,11 @@ class AuthService {
       email: normalizedEmail,
       phone: phone?.trim(),
       qualifications: qualifications,
-      isEmailPublic: isEmailPublic,
-      isPhonePublic: isPhonePublic,
-      forwardingEnabled: forwardingEnabled,
+      isEmailPublic: false,
+      isPhonePublic: false,
+      forwardingEnabled: false,
       forwardingAddress: VolunteerModel.generateForwardingAddress(id),
-      isEventPartner: isEp,
+      isEventPartner: false,
     );
 
     final account = UserAccount(
@@ -158,23 +229,25 @@ class AuthService {
     }
 
     // Set active volunteer session
-    await _prefs.setString(_userKey, jsonEncode(account.profile.toJson()));
-    return account.profile;
+    final sanitizedProfile = account.profile.withDisabledPrivacyAndEpSettings();
+    await _prefs.setString(_userKey, jsonEncode(sanitizedProfile.toJson()));
+    return sanitizedProfile;
   }
 
   /// Update the current volunteer's profile and persist to both active session & account registry
   Future<void> updateProfile(VolunteerModel updated) async {
-    await _prefs.setString(_userKey, jsonEncode(updated.toJson()));
+    final sanitized = updated.withDisabledPrivacyAndEpSettings();
+    await _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
 
     final accounts = _loadAccounts();
     final index = accounts.indexWhere(
       (a) =>
-          a.email == updated.email.trim().toLowerCase() ||
-          a.profile.id == updated.id,
+          a.email == sanitized.email.trim().toLowerCase() ||
+          a.profile.id == sanitized.id,
     );
 
     if (index >= 0) {
-      accounts[index] = accounts[index].copyWith(profile: updated);
+      accounts[index] = accounts[index].copyWith(profile: sanitized);
       await _saveAccounts(accounts);
     }
   }
@@ -204,9 +277,11 @@ class AuthService {
           email: 'alex.turner@example.org',
           phone: '+44 7700 900123',
           qualifications: ['head_ref', 'ref'],
-          isEmailPublic: true,
-          isPhonePublic: true,
+          isEmailPublic: false,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-alex102@volunteer.roboref.app',
+          isEventPartner: false,
         ),
       ),
       UserAccount(
@@ -219,8 +294,10 @@ class AuthService {
           email: 'sarah.j@example.co.uk',
           qualifications: ['judge_advisor', 'judge'],
           isEmailPublic: false,
-          forwardingEnabled: true,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-sarah91@volunteer.roboref.app',
+          isEventPartner: false,
         ),
       ),
       UserAccount(
@@ -232,8 +309,11 @@ class AuthService {
           name: 'Event Partner Lead',
           email: 'ep@example.co.uk',
           qualifications: ['head_ref', 'judge_advisor'],
+          isEmailPublic: false,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-eplead01@volunteer.roboref.app',
-          isEventPartner: true,
+          isEventPartner: false,
         ),
       ),
     ];

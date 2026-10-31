@@ -17,13 +17,13 @@ void main() {
         email: 'james@example.org',
         phone: '+44 7700 900000',
         qualifications: ['head_ref', 'ref'],
-        isEmailPublic: false,
-        isPhonePublic: false,
-        forwardingEnabled: true,
         forwardingAddress: forwarding,
-        isEventPartner: true,
       );
 
+      expect(volunteer.isEmailPublic, isFalse);
+      expect(volunteer.isPhonePublic, isFalse);
+      expect(volunteer.forwardingEnabled, isFalse);
+      expect(volunteer.isEventPartner, isFalse);
       expect(volunteer.hasQualification('head_ref'), isTrue);
       expect(volunteer.hasQualification('judge'), isFalse);
       expect(volunteer.qualifiedRoles.length, equals(2));
@@ -35,7 +35,10 @@ void main() {
       expect(restored.id, equals(volunteer.id));
       expect(restored.name, equals(volunteer.name));
       expect(restored.forwardingAddress, equals(volunteer.forwardingAddress));
-      expect(restored.isEventPartner, isTrue);
+      expect(restored.isEmailPublic, isFalse);
+      expect(restored.isPhonePublic, isFalse);
+      expect(restored.forwardingEnabled, isFalse);
+      expect(restored.isEventPartner, isFalse);
     });
 
     test('EventSignupModel serialization & EP verified checkmark', () {

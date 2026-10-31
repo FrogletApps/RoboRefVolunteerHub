@@ -22,9 +22,9 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _phoneController = TextEditingController();
 
   final Set<String> _selectedQualifications = {'head_ref', 'ref'};
-  bool _isPhonePublic = false;
-  bool _isEmailPublic = false;
-  bool _forwardingEnabled = true;
+  final bool _isPhonePublic = false;
+  final bool _isEmailPublic = false;
+  final bool _forwardingEnabled = false;
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _obscureConfirmPassword = true;
@@ -80,8 +80,6 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isEpInvite = widget.inviteCode == 'UK-EP-VERIFIED';
-
     return Scaffold(
       appBar: AppBar(
         title: const Text('Volunteer Registration'),
@@ -121,11 +119,6 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                                     color: AppTheme.brandGreen,
                                   ),
                                 ),
-                                if (isEpInvite)
-                                  const Text(
-                                    'Event Partner (EP) Verified Privileges Enabled',
-                                    style: TextStyle(fontSize: 12, color: AppTheme.brandGreenDark),
-                                  ),
                               ],
                             ),
                           ),
@@ -350,7 +343,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                               style: TextStyle(fontSize: 12),
                             ),
                             value: _isPhonePublic,
-                            onChanged: (val) => setState(() => _isPhonePublic = val),
+                            onChanged: null,
                           ),
                           const Divider(height: 1),
                           SwitchListTile(
@@ -360,7 +353,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                               style: TextStyle(fontSize: 12),
                             ),
                             value: _isEmailPublic,
-                            onChanged: (val) => setState(() => _isEmailPublic = val),
+                            onChanged: null,
                           ),
                           const Divider(height: 1),
                           SwitchListTile(
@@ -370,7 +363,7 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
                               style: TextStyle(fontSize: 12),
                             ),
                             value: _forwardingEnabled,
-                            onChanged: (val) => setState(() => _forwardingEnabled = val),
+                            onChanged: null,
                           ),
                         ],
                       ),

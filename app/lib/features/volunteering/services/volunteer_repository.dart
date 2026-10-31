@@ -9,9 +9,20 @@ class VolunteerRepository {
   final SharedPreferences _prefs;
   static const String _storageKey = 'event_volunteer_signups_v1';
 
-  VolunteerRepository(this._prefs);
+  VolunteerRepository(this._prefs) {
+    _loadAllSignups();
+  }
 
-  /// Load all saved signups from local storage
+  static bool _hasEnabledPrivacyOrEpInJson(Map<String, dynamic>? map) {
+    if (map == null) return false;
+    return map['isEmailPublic'] == true ||
+        map['isPhonePublic'] == true ||
+        map['forwardingEnabled'] == true ||
+        map['isEventPartner'] == true;
+  }
+
+  /// Load all saved signups from local storage, ensuring any volunteer privacy/EP
+  /// toggles on persisted signups are turned off.
   List<EventSignupModel> _loadAllSignups() {
     final raw = _prefs.getString(_storageKey);
     if (raw == null || raw.isEmpty) {
@@ -19,7 +30,26 @@ class VolunteerRepository {
     }
     try {
       final list = jsonDecode(raw) as List<dynamic>;
-      return list.map((e) => EventSignupModel.fromJson(e as Map<String, dynamic>)).toList();
+      var changed = false;
+      final signups = list.map((e) {
+        final signupMap = e as Map<String, dynamic>;
+        final volunteerMap = signupMap['volunteer'] as Map<String, dynamic>?;
+        final signup = EventSignupModel.fromJson(signupMap);
+        if (signup.volunteer != null) {
+          final sanitizedVol =
+              signup.volunteer!.withDisabledPrivacyAndEpSettings();
+          if (_hasEnabledPrivacyOrEpInJson(volunteerMap) ||
+              !identical(signup.volunteer, sanitizedVol)) {
+            changed = true;
+            return signup.copyWith(volunteer: sanitizedVol);
+          }
+        }
+        return signup;
+      }).toList();
+      if (changed) {
+        _saveAllSignups(signups);
+      }
+      return signups;
     } catch (e) {
       debugPrint('Error decoding signups: $e');
       return _getPreseededDemoSignups();
@@ -87,7 +117,7 @@ class VolunteerRepository {
       offeredRoles: offeredRoles,
       otherRoleDescription: otherRoleDescription,
       notes: notes,
-      volunteer: volunteer,
+      volunteer: volunteer.withDisabledPrivacyAndEpSettings(),
       updatedAt: DateTime.now(),
     );
 
@@ -158,9 +188,11 @@ class VolunteerRepository {
           email: 'alex.turner@example.org',
           phone: '+44 7700 900123',
           qualifications: ['head_ref', 'ref'],
-          isEmailPublic: true,
-          isPhonePublic: true,
+          isEmailPublic: false,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-alex102@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(days: 2)),
       ),
@@ -179,8 +211,10 @@ class VolunteerRepository {
           email: 'sarah.j@example.co.uk',
           qualifications: ['judge_advisor', 'judge'],
           isEmailPublic: false,
-          forwardingEnabled: true,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-sarah91@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(days: 3)),
       ),
@@ -199,8 +233,10 @@ class VolunteerRepository {
           email: 'david.c@example.org',
           qualifications: ['ref', 'judge'],
           isEmailPublic: false,
-          forwardingEnabled: true,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-david44@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(days: 1)),
       ),
@@ -220,9 +256,11 @@ class VolunteerRepository {
           email: 'emma.w@example.com',
           phone: '+44 7700 900555',
           qualifications: ['other'],
-          isEmailPublic: true,
+          isEmailPublic: false,
           isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-emma88@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(hours: 12)),
       ),
@@ -242,8 +280,10 @@ class VolunteerRepository {
           email: 'oliver.b@example.co.uk',
           qualifications: ['head_ref', 'ref'],
           isEmailPublic: false,
-          forwardingEnabled: true,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-oliver3@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(days: 4)),
       ),
@@ -262,9 +302,11 @@ class VolunteerRepository {
           email: 'hannah.s@example.org',
           phone: '+44 7700 900999',
           qualifications: ['ref', 'other'],
-          isEmailPublic: true,
-          isPhonePublic: true,
+          isEmailPublic: false,
+          isPhonePublic: false,
+          forwardingEnabled: false,
           forwardingAddress: 'vol-hannah7@volunteer.roboref.app',
+          isEventPartner: false,
         ),
         updatedAt: DateTime.now().subtract(const Duration(days: 1)),
       ),

@@ -102,7 +102,16 @@ void main() {
     expect(find.text('Volunteer Profile'), findsOneWidget);
     expect(find.text('Alex Turner'), findsWidgets);
     expect(find.text('vol-alex102@volunteer.roboref.app'), findsOneWidget);
-    expect(find.text('My Event Signups & Volunteering Data'), findsOneWidget);
+    expect(find.text('My Event Signups & Volunteering Data'), findsNothing);
+
+    // Verify all 4 switches in Contact Privacy & Email Forwarding section are off and disabled
+    final profileSwitches =
+        tester.widgetList<SwitchListTile>(find.byType(SwitchListTile)).toList();
+    expect(profileSwitches.length, equals(4));
+    for (final tile in profileSwitches) {
+      expect(tile.value, isFalse);
+      expect(tile.onChanged, isNull);
+    }
 
     // Navigate back to events screen and test logging out from AppBar
     await tester.pageBack();
@@ -120,5 +129,19 @@ void main() {
     // Verify returned to InviteGateScreen
     expect(find.text('Invite-Only Access'), findsOneWidget);
     expect(find.text('Volunteer Log In'), findsOneWidget);
+
+    // Verify registration screen privacy switches are also off and disabled
+    await tester.enterText(find.byKey(const Key('invite_code_input')), 'UKVEX-2026');
+    await tester.tap(find.byKey(const Key('verify_invite_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Volunteer Registration'), findsOneWidget);
+    final signupSwitches =
+        tester.widgetList<SwitchListTile>(find.byType(SwitchListTile)).toList();
+    expect(signupSwitches.length, equals(3));
+    for (final tile in signupSwitches) {
+      expect(tile.value, isFalse);
+      expect(tile.onChanged, isNull);
+    }
   });
 }

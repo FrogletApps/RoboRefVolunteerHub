@@ -121,7 +121,8 @@ class _EventRosterScreenState extends ConsumerState<EventRosterScreen> {
   Widget build(BuildContext context) {
     final signupsAsync = ref.watch(eventSignupsProvider(widget.event.sku));
     final userSignupAsync = ref.watch(userEventSignupProvider(widget.event.sku));
-    final currentUser = ref.watch(currentVolunteerProvider);
+    final currentUser =
+        ref.watch(currentVolunteerProvider)?.withDisabledPrivacyAndEpSettings();
     final isEp = currentUser?.isEventPartner ?? false;
     final progColor = getProgramColor(widget.event.program);
 
@@ -567,9 +568,18 @@ class _VolunteerCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final volunteer = signup.volunteer;
+    final volunteer = signup.volunteer?.withDisabledPrivacyAndEpSettings();
     final isConfirmed = signup.isConfirmed;
     final statusColor = isConfirmed ? AppTheme.statusConfirmed : AppTheme.statusAvailable;
+    final showPhone = volunteer != null &&
+        volunteer.isPhonePublic &&
+        volunteer.phone != null &&
+        volunteer.phone!.isNotEmpty;
+    final showEmail = volunteer != null && volunteer.isEmailPublic;
+    final showRelay = volunteer != null &&
+        !volunteer.isEmailPublic &&
+        volunteer.forwardingEnabled;
+    final hasVisibleContact = showPhone || showEmail || showRelay;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -734,64 +744,66 @@ class _VolunteerCard extends StatelessWidget {
                 ),
               ),
             ],
-            const SizedBox(height: 10),
-            const Divider(height: 1),
-            const SizedBox(height: 8),
+            if (hasVisibleContact) ...[
+              const SizedBox(height: 10),
+              const Divider(height: 1),
+              const SizedBox(height: 8),
 
-            // Privacy & Contact Action Bar
-            Row(
-              children: [
-                // Phone contact (if public)
-                if (volunteer != null && volunteer.isPhonePublic && volunteer.phone != null) ...[
-                  OutlinedButton.icon(
-                    onPressed: () => UrlUtils.openPhone(volunteer.phone!),
-                    icon: const Icon(Icons.phone, size: 14),
-                    label: Text(volunteer.phone!, style: const TextStyle(fontSize: 11)),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      visualDensity: VisualDensity.compact,
+              // Privacy & Contact Action Bar
+              Row(
+                children: [
+                  // Phone contact (if public)
+                  if (showPhone) ...[
+                    OutlinedButton.icon(
+                      onPressed: () => UrlUtils.openPhone(volunteer.phone!),
+                      icon: const Icon(Icons.phone, size: 14),
+                      label: Text(volunteer.phone!, style: const TextStyle(fontSize: 11)),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                ],
+                    const SizedBox(width: 8),
+                  ],
 
-                // Direct email contact (if public)
-                if (volunteer != null && volunteer.isEmailPublic) ...[
-                  OutlinedButton.icon(
-                    onPressed: () => UrlUtils.openEmail(
-                      recipientEmail: volunteer.email,
-                      subject: 'VEX Tournament Inquiry',
+                  // Direct email contact (if public)
+                  if (showEmail) ...[
+                    OutlinedButton.icon(
+                      onPressed: () => UrlUtils.openEmail(
+                        recipientEmail: volunteer.email,
+                        subject: 'VEX Tournament Inquiry',
+                      ),
+                      icon: const Icon(Icons.email, size: 14),
+                      label: Text(volunteer.email, style: const TextStyle(fontSize: 11)),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
-                    icon: const Icon(Icons.email, size: 14),
-                    label: Text(volunteer.email, style: const TextStyle(fontSize: 11)),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      visualDensity: VisualDensity.compact,
+                  ] else if (showRelay) ...[
+                    // Privacy Forwarding Relay Action Button
+                    OutlinedButton.icon(
+                      onPressed: onContactRelay,
+                      icon: const Icon(Icons.shield_outlined, size: 14, color: Colors.blue),
+                      label: const Text(
+                        'Email via Relay',
+                        style: TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.bold),
+                      ),
+                      style: OutlinedButton.styleFrom(
+                        side: const BorderSide(color: Colors.blue),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        visualDensity: VisualDensity.compact,
+                      ),
                     ),
-                  ),
-                ] else ...[
-                  // Privacy Forwarding Relay Action Button
-                  OutlinedButton.icon(
-                    onPressed: onContactRelay,
-                    icon: const Icon(Icons.shield_outlined, size: 14, color: Colors.blue),
-                    label: const Text(
-                      'Email via Relay',
-                      style: TextStyle(fontSize: 11, color: Colors.blue, fontWeight: FontWeight.bold),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Private Contact',
+                      style: TextStyle(fontSize: 10, color: Colors.grey[600]),
                     ),
-                    style: OutlinedButton.styleFrom(
-                      side: const BorderSide(color: Colors.blue),
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                      visualDensity: VisualDensity.compact,
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Text(
-                    'Private Contact',
-                    style: TextStyle(fontSize: 10, color: Colors.grey[600]),
-                  ),
+                  ],
                 ],
-              ],
-            ),
+              ),
+            ],
           ],
         ),
       ),

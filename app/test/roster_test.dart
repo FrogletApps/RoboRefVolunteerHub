@@ -1,7 +1,12 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/state/auth_provider.dart';
+import 'package:roboref_volunteer_hub/features/events/models/event_model.dart';
 import 'package:roboref_volunteer_hub/features/profile/models/volunteer_model.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/models/signup_model.dart';
+import 'package:roboref_volunteer_hub/features/volunteering/screens/event_roster_screen.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/services/volunteer_repository.dart';
 
 void main() {
@@ -96,6 +101,57 @@ void main() {
 
       userSignup = await repo.getUserSignupForEvent(sku: sku, volunteerId: testVolunteer.id);
       expect(userSignup, isNull);
+    });
+
+    testWidgets(
+        'Volunteer Roster hides all contact details (phone, email, and relay) for all users',
+        (WidgetTester tester) async {
+      tester.view.physicalSize = const Size(1000, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+
+      SharedPreferences.setMockInitialValues({});
+      final prefs = await SharedPreferences.getInstance();
+
+      const event = EventModel(
+        id: 1,
+        sku: 'RE-V5RC-26-9102',
+        name: 'UK VEX V5RC National Championship 2026-2027',
+        program: 'V5RC',
+        season: '2026-2027',
+        startDate: '2026-11-14',
+        endDate: '2026-11-15',
+        venue: 'Telford International Centre',
+        city: 'Telford',
+        region: 'Midlands',
+        country: 'United Kingdom',
+      );
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            sharedPreferencesProvider.overrideWithValue(prefs),
+          ],
+          child: const MaterialApp(
+            home: EventRosterScreen(event: event),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Volunteer names are visible on the roster
+      expect(find.text('Alex Turner'), findsOneWidget);
+      expect(find.text('Sarah Jenkins'), findsOneWidget);
+      expect(find.text('Emma Watson'), findsOneWidget);
+
+      // No phone numbers, email addresses, relay buttons, or Private Contact labels are shown
+      expect(find.text('+44 7700 900123'), findsNothing);
+      expect(find.text('alex.turner@example.org'), findsNothing);
+      expect(find.text('emma.w@example.com'), findsNothing);
+      expect(find.text('Email via Relay'), findsNothing);
+      expect(find.text('Private Contact'), findsNothing);
+      expect(find.byIcon(Icons.phone), findsNothing);
+      expect(find.byIcon(Icons.email), findsNothing);
     });
   });
 }

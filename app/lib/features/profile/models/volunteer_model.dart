@@ -23,11 +23,27 @@ class VolunteerModel {
     this.qualifications = const [],
     this.isEmailPublic = false,
     this.isPhonePublic = false,
-    this.forwardingEnabled = true,
+    this.forwardingEnabled = false,
     required this.forwardingAddress,
     this.isEventPartner = false,
     this.certifications,
   });
+
+  /// Returns a copy with all Contact Privacy, Email Forwarding, and EP Mode settings turned off.
+  VolunteerModel withDisabledPrivacyAndEpSettings() {
+    if (!isEmailPublic &&
+        !isPhonePublic &&
+        !forwardingEnabled &&
+        !isEventPartner) {
+      return this;
+    }
+    return copyWith(
+      isEmailPublic: false,
+      isPhonePublic: false,
+      forwardingEnabled: false,
+      isEventPartner: false,
+    );
+  }
 
   /// Generate a clean email forwarding alias from volunteer ID
   static String generateForwardingAddress(String id) {
@@ -97,12 +113,12 @@ class VolunteerModel {
               ?.map((e) => e.toString())
               .toList() ??
           [],
-      isEmailPublic: json['isEmailPublic'] as bool? ?? false,
-      isPhonePublic: json['isPhonePublic'] as bool? ?? false,
-      forwardingEnabled: json['forwardingEnabled'] as bool? ?? true,
+      isEmailPublic: false,
+      isPhonePublic: false,
+      forwardingEnabled: false,
       forwardingAddress: json['forwardingAddress'] as String? ??
           generateForwardingAddress(rawId),
-      isEventPartner: json['isEventPartner'] as bool? ?? false,
+      isEventPartner: false,
       certifications: json['certifications'] as String?,
     );
   }
