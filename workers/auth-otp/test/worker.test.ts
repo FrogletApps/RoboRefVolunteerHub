@@ -1,7 +1,10 @@
 import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { handleWorkerRequest } from "../src/index.ts";
-import { clearCachedGoogleOAuthTokenForTests } from "../src/firebaseAdmin.ts";
+import {
+  clearCachedGoogleOAuthTokenForTests,
+  FIREBASE_SECURETOKEN_JWKS_URL,
+} from "../src/firebaseAdmin.ts";
 import type { Env, KvStore, OutboundEmailPayload } from "../src/types.ts";
 
 class MemoryKv implements KvStore {
@@ -73,6 +76,8 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
     { uid: string; emailVerified: boolean; inviteVerified: boolean }
   >;
   let serviceAccountJson: string;
+  let secureTokenKeyPair: CryptoKeyPair;
+  let secureTokenPublicJwk: JsonWebKey & { kid: string };
 
   beforeEach(async () => {
     clearCachedGoogleOAuthTokenForTests();
@@ -81,7 +86,56 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
     sentEmails = [];
     registeredFirebaseUsers = new Map();
     serviceAccountJson = await generateTestServiceAccountJson();
+    secureTokenKeyPair = await crypto.subtle.generateKey(
+      {
+        name: "RSASSA-PKCS1-v1_5",
+        modulusLength: 2048,
+        publicExponent: new Uint8Array([1, 0, 1]),
+        hash: "SHA-256",
+      },
+      true,
+      ["sign", "verify"]
+    );
+    const pubJwk = await crypto.subtle.exportKey(
+      "jwk",
+      secureTokenKeyPair.publicKey
+    );
+    secureTokenPublicJwk = { ...pubJwk, kid: "test-google-kid-1" };
   });
+
+  async function mintMockFirebaseIdToken(overrides: Record<string, unknown> = {}): Promise<string> {
+    const b64url = (bytes: Uint8Array) => {
+      let bin = "";
+      for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+      return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+    };
+    const enc = new TextEncoder();
+    const nowSec = Math.floor(currentTimeMs / 1000);
+    const header = b64url(
+      enc.encode(JSON.stringify({ alg: "RS256", typ: "JWT", kid: "test-google-kid-1" }))
+    );
+    const payload = b64url(
+      enc.encode(
+        JSON.stringify({
+          iss: "https://securetoken.google.com/roboref-test",
+          aud: "roboref-test",
+          sub: "google-uid-42",
+          email: "google-vol@example.org",
+          email_verified: true,
+          iat: nowSec,
+          exp: nowSec + 3600,
+          ...overrides,
+        })
+      )
+    );
+    const signingInput = `${header}.${payload}`;
+    const sig = await crypto.subtle.sign(
+      "RSASSA-PKCS1-v1_5",
+      secureTokenKeyPair.privateKey,
+      enc.encode(signingInput)
+    );
+    return `${signingInput}.${b64url(new Uint8Array(sig))}`;
+  }
 
   function createEnv(overrides: Partial<Env> = {}): Env {
     return {
@@ -119,6 +173,16 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
         const params = new URLSearchParams(String(init?.body ?? ""));
         const ok = params.get("response") === "valid-turnstile";
         return new Response(JSON.stringify({ success: ok }), { status: 200 });
+      }
+
+      if (url === FIREBASE_SECURETOKEN_JWKS_URL) {
+        return new Response(
+          JSON.stringify({ keys: [secureTokenPublicJwk] }),
+          {
+            status: 200,
+            headers: { "Cache-Control": "public, max-age=3600" },
+          }
+        );
       }
 
       if (url === "https://oauth2.googleapis.com/token") {
@@ -495,5 +559,98 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
       deps
     );
     assert.equal(sixthRes.status, 401);
+  });
+
+  it("verifies Google Firebase ID Token + invite code on /api/auth/claim-invite and rejects wrong invite or forged token", async () => {
+    const env = createEnv({ REQUIRE_TURNSTILE: "false" });
+    registeredFirebaseUsers.set("google-vol@example.org", {
+      uid: "google-uid-42",
+      emailVerified: true,
+      inviteVerified: false,
+    });
+
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    const validIdToken = await mintMockFirebaseIdToken();
+
+    // 1. Wrong invite code must be rejected with 403 before touching Firebase claims
+    const wrongInviteRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/claim-invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${validIdToken}`,
+          "CF-Connecting-IP": "203.0.113.77",
+        },
+        body: JSON.stringify({ inviteCode: "WRONG-CODE" }),
+      }),
+      env,
+      deps
+    );
+    assert.equal(wrongInviteRes.status, 403);
+    assert.equal(
+      registeredFirebaseUsers.get("google-vol@example.org")?.inviteVerified,
+      false
+    );
+
+    // 2. Wrong project audience token must be rejected with 401 even with valid invite code
+    const wrongAudToken = await mintMockFirebaseIdToken({
+      aud: "other-project",
+      iss: "https://securetoken.google.com/other-project",
+    });
+    const wrongAudRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/claim-invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${wrongAudToken}`,
+          "CF-Connecting-IP": "203.0.113.77",
+        },
+        body: JSON.stringify({ inviteCode: "UKVEX-2026" }),
+      }),
+      env,
+      deps
+    );
+    assert.equal(wrongAudRes.status, 401);
+
+    // 3. Valid Google ID token + valid invite code stamps inviteVerified: true and sends 0 emails
+    const okRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/claim-invite", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${validIdToken}`,
+          Origin: "http://localhost:54321",
+          "CF-Connecting-IP": "203.0.113.77",
+        },
+        body: JSON.stringify({ inviteCode: "ukvex-2026" }),
+      }),
+      createEnv({
+        REQUIRE_TURNSTILE: "false",
+        ALLOWED_ORIGINS: "https://volunteer.roboref.app,http://localhost:5000",
+      }),
+      deps
+    );
+    assert.equal(okRes.status, 200);
+    assert.equal(
+      okRes.headers.get("Access-Control-Allow-Origin"),
+      "http://localhost:54321"
+    );
+    const okJson = (await okRes.json()) as {
+      ok: boolean;
+      uid: string;
+      email: string;
+    };
+    assert.equal(okJson.ok, true);
+    assert.equal(okJson.uid, "google-uid-42");
+    assert.equal(okJson.email, "google-vol@example.org");
+    assert.equal(
+      registeredFirebaseUsers.get("google-vol@example.org")?.inviteVerified,
+      true
+    );
+    assert.equal(sentEmails.length, 0);
   });
 });

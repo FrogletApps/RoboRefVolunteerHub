@@ -9,10 +9,14 @@ import 'otp_auth_api_client.dart';
 class AuthSession {
   final String uid;
   final String email;
+  final String? displayName;
+  final bool inviteVerified;
 
   const AuthSession({
     required this.uid,
     required this.email,
+    this.displayName,
+    this.inviteVerified = true,
   });
 
   @override
@@ -21,10 +25,23 @@ class AuthSession {
       other is AuthSession &&
           runtimeType == other.runtimeType &&
           uid == other.uid &&
-          email == other.email;
+          email == other.email &&
+          displayName == other.displayName &&
+          inviteVerified == other.inviteVerified;
 
   @override
-  int get hashCode => Object.hash(uid, email);
+  int get hashCode => Object.hash(uid, email, displayName, inviteVerified);
+}
+
+@immutable
+class GoogleAuthResult {
+  final AuthSession session;
+  final String idToken;
+
+  const GoogleAuthResult({
+    required this.session,
+    required this.idToken,
+  });
 }
 
 /// Abstract backend persistence & identity contract for Firebase Auth + Firestore.
@@ -37,6 +54,10 @@ abstract class AuthBackend {
     String customToken, {
     String fallbackEmail = '',
   });
+
+  Future<GoogleAuthResult> signInWithGoogle();
+
+  Future<AuthSession> refreshInviteClaims();
 
   Future<VolunteerModel?> fetchVolunteerProfile(AuthSession session);
 
@@ -53,6 +74,7 @@ abstract class AuthBackend {
 class FirebaseAuthBackend implements AuthBackend {
   final FirebaseAuth _firebaseAuth;
   final FirebaseFirestore _firestore;
+  AuthSession? _lastKnownSession;
 
   FirebaseAuthBackend({
     FirebaseAuth? firebaseAuth,
@@ -60,20 +82,47 @@ class FirebaseAuthBackend implements AuthBackend {
   })  : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance,
         _firestore = firestore ?? FirebaseFirestore.instance;
 
-  static AuthSession? _userToSession(User? user, {String fallbackEmail = ''}) {
+  static Future<AuthSession?> _userToSessionAsync(
+    User? user, {
+    String fallbackEmail = '',
+    bool forceRefresh = false,
+  }) async {
     if (user == null) return null;
+    final tokenResult = await user.getIdTokenResult(forceRefresh);
+    final inviteVerified = tokenResult.claims?['inviteVerified'] == true;
+    final cleanDisplayName = user.displayName?.trim();
     return AuthSession(
       uid: user.uid,
       email: (user.email ?? fallbackEmail).trim().toLowerCase(),
+      displayName: (cleanDisplayName != null && cleanDisplayName.isNotEmpty)
+          ? cleanDisplayName
+          : null,
+      inviteVerified: inviteVerified,
     );
   }
 
   @override
-  AuthSession? get currentSession => _userToSession(_firebaseAuth.currentUser);
+  AuthSession? get currentSession {
+    final user = _firebaseAuth.currentUser;
+    if (user == null) return null;
+    if (_lastKnownSession != null && _lastKnownSession!.uid == user.uid) {
+      return _lastKnownSession;
+    }
+    return AuthSession(
+      uid: user.uid,
+      email: (user.email ?? '').trim().toLowerCase(),
+      displayName: user.displayName,
+      inviteVerified: false,
+    );
+  }
 
   @override
   Stream<AuthSession?> authSessionChanges() {
-    return _firebaseAuth.authStateChanges().map(_userToSession);
+    return _firebaseAuth.idTokenChanges().asyncMap((user) async {
+      final session = await _userToSessionAsync(user);
+      _lastKnownSession = session;
+      return session;
+    });
   }
 
   @override
@@ -82,13 +131,90 @@ class FirebaseAuthBackend implements AuthBackend {
     String fallbackEmail = '',
   }) async {
     final cred = await _firebaseAuth.signInWithCustomToken(customToken);
-    final session = _userToSession(cred.user, fallbackEmail: fallbackEmail);
+    final session = await _userToSessionAsync(
+      cred.user,
+      fallbackEmail: fallbackEmail,
+    );
     if (session == null) {
       throw const AuthApiException(
         code: 'firebase_signin_failed',
         message: 'Unable to establish a device session. Please try again.',
       );
     }
+    _lastKnownSession = session;
+    return session;
+  }
+
+  @override
+  Future<GoogleAuthResult> signInWithGoogle() async {
+    final provider = GoogleAuthProvider();
+    provider.setCustomParameters(const {'prompt': 'select_account'});
+
+    try {
+      final UserCredential cred = kIsWeb
+          ? await _firebaseAuth.signInWithPopup(provider)
+          : await _firebaseAuth.signInWithProvider(provider);
+
+      final user = cred.user;
+      if (user == null) {
+        throw const AuthApiException(
+          code: 'google_signin_failed',
+          message: 'Unable to sign in with Google right now. Please try again.',
+        );
+      }
+
+      final tokenResult = await user.getIdTokenResult(false);
+      final idToken = tokenResult.token ?? await user.getIdToken() ?? '';
+      final inviteVerified = tokenResult.claims?['inviteVerified'] == true;
+      final cleanDisplayName = user.displayName?.trim();
+
+      final session = AuthSession(
+        uid: user.uid,
+        email: (user.email ?? '').trim().toLowerCase(),
+        displayName: (cleanDisplayName != null && cleanDisplayName.isNotEmpty)
+            ? cleanDisplayName
+            : null,
+        inviteVerified: inviteVerified,
+      );
+      _lastKnownSession = session;
+
+      return GoogleAuthResult(session: session, idToken: idToken);
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'popup-closed-by-user' ||
+          e.code == 'cancelled-popup-request' ||
+          e.code == 'web-context-canceled') {
+        throw const AuthApiException(
+          code: 'google_signin_cancelled',
+          message: 'Google sign-in was cancelled.',
+        );
+      }
+      if (e.code == 'unauthorized-domain') {
+        throw const AuthApiException(
+          code: 'unauthorized_domain',
+          message:
+              'This domain is not authorized for Google Sign-In in Firebase Authentication -> Settings -> Authorized domains.',
+        );
+      }
+      throw AuthApiException(
+        code: e.code,
+        message: e.message ?? 'Google sign-in failed. Please try again.',
+      );
+    }
+  }
+
+  @override
+  Future<AuthSession> refreshInviteClaims() async {
+    final session = await _userToSessionAsync(
+      _firebaseAuth.currentUser,
+      forceRefresh: true,
+    );
+    if (session == null) {
+      throw const AuthApiException(
+        code: 'unauthenticated',
+        message: 'Your session expired while verifying your invite code.',
+      );
+    }
+    _lastKnownSession = session;
     return session;
   }
 
@@ -148,6 +274,7 @@ class FirebaseAuthBackend implements AuthBackend {
 
   @override
   Future<void> signOut() async {
+    _lastKnownSession = null;
     await _firebaseAuth.signOut();
   }
 }
@@ -161,9 +288,20 @@ class InMemoryAuthBackend implements AuthBackend {
   final StreamController<AuthSession?> _controller =
       StreamController<AuthSession?>.broadcast();
 
+  String mockGoogleUid;
+  String mockGoogleEmail;
+  String? mockGoogleDisplayName;
+  bool mockGoogleInviteVerified;
+  String mockGoogleIdToken;
+
   InMemoryAuthBackend({
     AuthSession? initialSession,
     VolunteerModel? initialProfile,
+    this.mockGoogleUid = 'google-uid-test',
+    this.mockGoogleEmail = 'google.volunteer@example.co.uk',
+    this.mockGoogleDisplayName = 'Google Volunteer',
+    this.mockGoogleInviteVerified = false,
+    this.mockGoogleIdToken = 'mock-google-firebase-id-token',
   }) : _session = initialSession {
     if (initialSession != null && initialProfile != null) {
       final sanitized = initialProfile.withDisabledPrivacyAndEpSettings();
@@ -191,7 +329,6 @@ class InMemoryAuthBackend implements AuthBackend {
     String customToken, {
     String fallbackEmail = '',
   }) async {
-    // Allow test tokens formatted as `custom-token:<uid>:<email>` or plain strings
     var uid = 'vol-${fallbackEmail.hashCode.abs()}';
     var email = fallbackEmail;
     final parts = customToken.split(':');
@@ -200,10 +337,47 @@ class InMemoryAuthBackend implements AuthBackend {
       email = parts.sublist(2).join(':');
     }
 
-    final session = AuthSession(uid: uid, email: email.trim().toLowerCase());
+    final session = AuthSession(
+      uid: uid,
+      email: email.trim().toLowerCase(),
+      inviteVerified: true,
+    );
     _session = session;
     _controller.add(session);
     return session;
+  }
+
+  @override
+  Future<GoogleAuthResult> signInWithGoogle() async {
+    final session = AuthSession(
+      uid: mockGoogleUid,
+      email: mockGoogleEmail.trim().toLowerCase(),
+      displayName: mockGoogleDisplayName,
+      inviteVerified: mockGoogleInviteVerified,
+    );
+    _session = session;
+    _controller.add(session);
+    return GoogleAuthResult(session: session, idToken: mockGoogleIdToken);
+  }
+
+  @override
+  Future<AuthSession> refreshInviteClaims() async {
+    if (_session == null) {
+      throw const AuthApiException(
+        code: 'unauthenticated',
+        message: 'No active session to refresh.',
+      );
+    }
+    mockGoogleInviteVerified = true;
+    final updated = AuthSession(
+      uid: _session!.uid,
+      email: _session!.email,
+      displayName: _session!.displayName,
+      inviteVerified: true,
+    );
+    _session = updated;
+    _controller.add(updated);
+    return updated;
   }
 
   @override
@@ -286,6 +460,57 @@ class AuthService {
       );
     }
     return clean;
+  }
+
+  /// Returning Volunteer Google Sign-In: succeeds immediately if the account
+  /// already carries `inviteVerified == true`; otherwise signs out and prompts
+  /// for an invitation code.
+  Future<AuthSession> signInWithGoogle() async {
+    final google = await _backend.signInWithGoogle();
+    if (!google.session.inviteVerified) {
+      final accountLabel = google.session.email.isNotEmpty
+          ? google.session.email
+          : 'that Google account';
+      await _backend.signOut();
+      throw AuthApiException(
+        code: 'invite_required',
+        message:
+            'No verified volunteer account was found for $accountLabel. Enter your invitation code under "New Volunteer" and tap Continue with Google.',
+      );
+    }
+    return google.session;
+  }
+
+  /// New Volunteer Google Sign-In: validates the invitation code on the
+  /// Cloudflare Worker before granting `inviteVerified: true` on Firebase Auth.
+  Future<AuthSession> joinWithGoogle({
+    required String inviteCode,
+    String? turnstileToken,
+  }) async {
+    final cleanCode = inviteCode.trim().toUpperCase();
+    if (cleanCode.isEmpty) {
+      throw const AuthApiException(
+        code: 'missing_invite_code',
+        message: 'Please enter your invitation code first.',
+      );
+    }
+
+    final google = await _backend.signInWithGoogle();
+    if (google.session.inviteVerified) {
+      return google.session;
+    }
+
+    try {
+      await _apiClient.claimInvite(
+        idToken: google.idToken,
+        inviteCode: cleanCode,
+        turnstileToken: turnstileToken,
+      );
+      return await _backend.refreshInviteClaims();
+    } catch (_) {
+      await _backend.signOut();
+      rethrow;
+    }
   }
 
   /// Step 1a (Returning Volunteer): Request a 6-digit OTP email.

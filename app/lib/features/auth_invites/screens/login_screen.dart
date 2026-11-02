@@ -21,10 +21,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
   AuthOtpMode _mode = AuthOtpMode.login;
   bool _awaitingOtp = false;
   bool _isBusy = false;
+  bool _isGoogleBusy = false;
   String? _errorMessage;
   String? _infoMessage;
   int _resendSecondsRemaining = 0;
   Timer? _cooldownTimer;
+
+  bool get _anyBusy => _isBusy || _isGoogleBusy;
 
   @override
   void dispose() {
@@ -54,6 +57,55 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         setState(() => _resendSecondsRemaining -= 1);
       }
     });
+  }
+
+  Future<void> _continueWithGoogle() async {
+    final inviteCode = _inviteCodeController.text.trim();
+    if (_mode == AuthOtpMode.join && inviteCode.isEmpty) {
+      setState(() {
+        _errorMessage = 'Please enter your invitation code first.';
+      });
+      return;
+    }
+
+    setState(() {
+      _isGoogleBusy = true;
+      _errorMessage = null;
+      _infoMessage = null;
+    });
+
+    try {
+      final notifier = ref.read(authControllerProvider.notifier);
+      if (_mode == AuthOtpMode.join) {
+        await notifier.joinWithGoogle(inviteCode: inviteCode);
+      } else {
+        await notifier.signInWithGoogle();
+      }
+    } on AuthApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'google_signin_cancelled') {
+        // User simply closed the Google account chooser; don't show an error banner.
+        return;
+      }
+      if (e.code == 'invite_required') {
+        setState(() {
+          _mode = AuthOtpMode.join;
+          _errorMessage = e.message;
+        });
+        return;
+      }
+      setState(() => _errorMessage = e.message);
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _errorMessage =
+            'Unable to complete Google sign-in right now. Please try again.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isGoogleBusy = false);
+      }
+    }
   }
 
   Future<void> _requestOtp() async {
@@ -102,10 +154,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (e.retryAfterSeconds != null && e.retryAfterSeconds! > 0) {
         _startCooldown(e.retryAfterSeconds!);
       }
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       setState(() {
-        _errorMessage = 'Unable to connect to authentication server. Please try again.';
+        _errorMessage =
+            'Unable to connect to authentication server. Please try again.';
       });
     } finally {
       if (mounted) {
@@ -120,7 +173,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
     if (code.length != 6) {
       setState(() {
-        _errorMessage = 'Please enter the 6-digit verification code from your email.';
+        _errorMessage =
+            'Please enter the 6-digit verification code from your email.';
       });
       return;
     }
@@ -262,7 +316,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
           ],
           selected: {_mode},
-          onSelectionChanged: _isBusy
+          onSelectionChanged: _anyBusy
               ? null
               : (selection) {
                   setState(() {
@@ -281,8 +335,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         const SizedBox(height: 6),
         Text(
           isJoin
-              ? 'New volunteer registration is invite-only. Enter your invitation code and email to receive a 6-digit verification code.'
-              : 'Enter your registered email to receive a one-time 6-digit code. Your session stays remembered on this device.',
+              ? 'New volunteer registration is invite-only. Enter your invitation code first, then continue with Google or a 6-digit email code.'
+              : 'Sign in with Google or receive a one-time 6-digit email code. Your session stays remembered on this device.',
           style: TextStyle(fontSize: 13, color: Colors.grey[700]),
         ),
         const SizedBox(height: 18),
@@ -299,7 +353,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           TextField(
             key: const Key('invite_code_input'),
             controller: _inviteCodeController,
-            enabled: !_isBusy,
+            enabled: !_anyBusy,
             textCapitalization: TextCapitalization.characters,
             decoration: const InputDecoration(
               labelText: 'Invitation Code',
@@ -307,13 +361,61 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
               prefixIcon: Icon(Icons.pin_outlined),
             ),
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
         ],
+
+        OutlinedButton.icon(
+          key: const Key('google_signin_button'),
+          onPressed: _anyBusy ? null : _continueWithGoogle,
+          style: OutlinedButton.styleFrom(
+            padding: const EdgeInsets.symmetric(vertical: 13, horizontal: 16),
+            side: BorderSide(color: Colors.grey.shade400),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+          ),
+          icon: _isGoogleBusy
+              ? const SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(strokeWidth: 2),
+                )
+              : const _GoogleLogoBadge(),
+          label: Text(
+            _isGoogleBusy
+                ? 'Connecting to Google...'
+                : (isJoin
+                    ? 'Verify Invite & Continue with Google'
+                    : 'Continue with Google'),
+            style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+          ),
+        ),
+
+        const SizedBox(height: 16),
+        Row(
+          children: [
+            Expanded(child: Divider(color: Colors.grey.shade300)),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 10),
+              child: Text(
+                'OR USE EMAIL CODE',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  letterSpacing: 0.6,
+                  color: Colors.grey[600],
+                ),
+              ),
+            ),
+            Expanded(child: Divider(color: Colors.grey.shade300)),
+          ],
+        ),
+        const SizedBox(height: 16),
 
         TextField(
           key: const Key('login_email_input'),
           controller: _emailController,
-          enabled: !_isBusy,
+          enabled: !_anyBusy,
           keyboardType: TextInputType.emailAddress,
           autofillHints: const [AutofillHints.email],
           decoration: const InputDecoration(
@@ -323,11 +425,11 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           ),
           onSubmitted: (_) => _requestOtp(),
         ),
-        const SizedBox(height: 18),
+        const SizedBox(height: 16),
 
         ElevatedButton.icon(
           key: const Key('request_otp_button'),
-          onPressed: _isBusy ? null : _requestOtp,
+          onPressed: _anyBusy ? null : _requestOtp,
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 14),
           ),
@@ -360,12 +462,12 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Row(
+        const Row(
           children: [
-            const Icon(Icons.mark_email_unread_outlined,
+            Icon(Icons.mark_email_unread_outlined,
                 color: AppTheme.brandGreen, size: 22),
-            const SizedBox(width: 8),
-            const Expanded(
+            SizedBox(width: 8),
+            Expanded(
               child: Text(
                 'Enter 6-Digit Verification Code',
                 style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
@@ -393,7 +495,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         TextField(
           key: const Key('otp_code_input'),
           controller: _otpController,
-          enabled: !_isBusy,
+          enabled: !_anyBusy,
           keyboardType: TextInputType.number,
           textAlign: TextAlign.center,
           maxLength: 6,
@@ -420,7 +522,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
 
         ElevatedButton.icon(
           key: const Key('verify_otp_button'),
-          onPressed: _isBusy ? null : _verifyOtp,
+          onPressed: _anyBusy ? null : _verifyOtp,
           style: ElevatedButton.styleFrom(
             padding: const EdgeInsets.symmetric(vertical: 14),
           ),
@@ -446,14 +548,14 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
           children: [
             TextButton.icon(
               key: const Key('change_email_button'),
-              onPressed: _isBusy ? null : _resetToEmailStep,
+              onPressed: _anyBusy ? null : _resetToEmailStep,
               icon: const Icon(Icons.arrow_back, size: 16),
               label: const Text('Change Email', style: TextStyle(fontSize: 12)),
             ),
             TextButton(
               key: const Key('resend_otp_button'),
               onPressed:
-                  (_isBusy || _resendSecondsRemaining > 0) ? null : _requestOtp,
+                  (_anyBusy || _resendSecondsRemaining > 0) ? null : _requestOtp,
               child: Text(
                 _resendSecondsRemaining > 0
                     ? 'Resend in ${_resendSecondsRemaining}s'
@@ -499,6 +601,34 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Self-contained Google "G" badge (avoids external network image requests).
+class _GoogleLogoBadge extends StatelessWidget {
+  const _GoogleLogoBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 22,
+      height: 22,
+      alignment: Alignment.center,
+      decoration: BoxDecoration(
+        color: Colors.white,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: const Text(
+        'G',
+        style: TextStyle(
+          fontSize: 13,
+          fontWeight: FontWeight.w800,
+          color: Color(0xFF4285F4),
+          height: 1.0,
+        ),
       ),
     );
   }

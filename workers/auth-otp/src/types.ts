@@ -69,6 +69,12 @@ export interface VerifyOtpBody {
   code: string;
 }
 
+export interface ClaimInviteBody {
+  idToken?: string;
+  inviteCode: string;
+  turnstileToken?: string;
+}
+
 export class HttpError extends Error {
   public readonly status: number;
   public readonly code: string;

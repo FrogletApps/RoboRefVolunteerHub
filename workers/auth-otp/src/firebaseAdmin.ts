@@ -21,6 +21,14 @@ let cachedAccessToken: {
   expiresAtMs: number;
 } | null = null;
 
+export const FIREBASE_SECURETOKEN_JWKS_URL =
+  "https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com";
+
+let cachedSecureTokenJwks: {
+  keysByKid: Map<string, JsonWebKey>;
+  expiresAtMs: number;
+} | null = null;
+
 export function parseServiceAccount(rawJson: string | undefined): ServiceAccountCredentials {
   if (!rawJson) {
     throw new HttpError(
@@ -194,6 +202,226 @@ async function getGoogleOAuthToken(
 
 export function clearCachedGoogleOAuthTokenForTests(): void {
   cachedAccessToken = null;
+  cachedSecureTokenJwks = null;
+}
+
+function base64UrlDecodeBytes(b64url: string): Uint8Array {
+  const padded = b64url
+    .replace(/-/g, "+")
+    .replace(/_/g, "/")
+    .padEnd(Math.ceil(b64url.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+function base64UrlDecodeJson(b64url: string): Record<string, unknown> {
+  const bytes = base64UrlDecodeBytes(b64url);
+  const text = new TextDecoder().decode(bytes);
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Invalid JWT JSON segment.");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+async function fetchSecureTokenJwk(
+  kid: string,
+  fetchImpl: typeof fetch,
+  forceRefresh: boolean = false
+): Promise<JsonWebKey | undefined> {
+  const nowMs = Date.now();
+  if (
+    !forceRefresh &&
+    cachedSecureTokenJwks &&
+    cachedSecureTokenJwks.expiresAtMs > nowMs
+  ) {
+    const cached = cachedSecureTokenJwks.keysByKid.get(kid);
+    if (cached) return cached;
+  }
+
+  const resp = await fetchImpl(FIREBASE_SECURETOKEN_JWKS_URL, {
+    method: "GET",
+  });
+  if (!resp.ok) {
+    throw new HttpError(
+      502,
+      "firebase_jwks_unavailable",
+      "Unable to retrieve Firebase public signing keys right now."
+    );
+  }
+
+  const cacheControl = resp.headers.get("Cache-Control") ?? "";
+  const maxAgeMatch = cacheControl.match(/max-age=(\d+)/i);
+  const ttlSeconds = maxAgeMatch
+    ? Math.max(60, Number.parseInt(maxAgeMatch[1], 10))
+    : 3600;
+
+  const data = (await resp.json()) as {
+    keys?: Array<JsonWebKey & { kid?: string }>;
+  };
+
+  const keysByKid = new Map<string, JsonWebKey>();
+  for (const key of data.keys ?? []) {
+    if (key && typeof key.kid === "string" && key.kid.length > 0) {
+      keysByKid.set(key.kid, key);
+    }
+  }
+
+  cachedSecureTokenJwks = {
+    keysByKid,
+    expiresAtMs: nowMs + ttlSeconds * 1000,
+  };
+
+  return keysByKid.get(kid);
+}
+
+/**
+ * Cryptographically verifies a Firebase Auth ID Token (RS256 JWT issued by
+ * `https://securetoken.google.com/<project_id>`) using Google's public JWKS.
+ */
+export async function verifyFirebaseIdToken(
+  sa: ServiceAccountCredentials,
+  rawIdToken: string,
+  fetchImpl: typeof fetch = fetch,
+  nowSeconds: number = Math.floor(Date.now() / 1000)
+): Promise<{ uid: string; email: string }> {
+  const token = rawIdToken.trim();
+  const segments = token.split(".");
+  if (segments.length !== 3 || segments.some((s) => s.length === 0)) {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Invalid or malformed authentication token."
+    );
+  }
+
+  let header: Record<string, unknown>;
+  let payload: Record<string, unknown>;
+  let signatureBytes: Uint8Array;
+  try {
+    header = base64UrlDecodeJson(segments[0]);
+    payload = base64UrlDecodeJson(segments[1]);
+    signatureBytes = base64UrlDecodeBytes(segments[2]);
+  } catch {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Invalid or malformed authentication token."
+    );
+  }
+
+  const kid = typeof header.kid === "string" ? header.kid : "";
+  if (header.alg !== "RS256" || !kid) {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Unsupported authentication token signature algorithm."
+    );
+  }
+
+  const expectedIssuer = `https://securetoken.google.com/${sa.project_id}`;
+  const uid = typeof payload.sub === "string" ? payload.sub : "";
+  const exp = typeof payload.exp === "number" ? payload.exp : 0;
+  const iat = typeof payload.iat === "number" ? payload.iat : 0;
+
+  if (
+    payload.iss !== expectedIssuer ||
+    payload.aud !== sa.project_id ||
+    !uid ||
+    uid.length > 128 ||
+    exp <= nowSeconds ||
+    iat > nowSeconds + 60
+  ) {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Authentication token is expired or belongs to another project."
+    );
+  }
+
+  let jwk = await fetchSecureTokenJwk(kid, fetchImpl, false);
+  if (!jwk) {
+    jwk = await fetchSecureTokenJwk(kid, fetchImpl, true);
+  }
+  if (!jwk) {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Unrecognized authentication token signing key."
+    );
+  }
+
+  let validSignature = false;
+  try {
+    const publicKey = await crypto.subtle.importKey(
+      "jwk",
+      jwk,
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+      false,
+      ["verify"]
+    );
+    const signingInput = encoder.encode(`${segments[0]}.${segments[1]}`);
+    validSignature = await crypto.subtle.verify(
+      "RSASSA-PKCS1-v1_5",
+      publicKey,
+      signatureBytes as BufferSource,
+      signingInput
+    );
+  } catch {
+    validSignature = false;
+  }
+
+  if (!validSignature) {
+    throw new HttpError(
+      401,
+      "invalid_id_token",
+      "Authentication token signature verification failed."
+    );
+  }
+
+  const email =
+    typeof payload.email === "string" ? payload.email.trim().toLowerCase() : "";
+  return { uid, email };
+}
+
+/**
+ * Stamps persistent `{"inviteVerified": true}` custom claims onto an existing
+ * Firebase Auth UID (e.g., after verifying an invite code for a Google user).
+ */
+export async function grantInviteVerifiedByUid(
+  sa: ServiceAccountCredentials,
+  uid: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<void> {
+  const accessToken = await getGoogleOAuthToken(sa, fetchImpl);
+  const baseUrl = `https://identitytoolkit.googleapis.com/v1/projects/${encodeURIComponent(
+    sa.project_id
+  )}`;
+
+  const updateResp = await fetchImpl(`${baseUrl}/accounts:update`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      localId: uid,
+      emailVerified: true,
+      customAttributes: JSON.stringify({ inviteVerified: true }),
+    }),
+  });
+
+  if (!updateResp.ok) {
+    throw new HttpError(
+      502,
+      "firebase_claims_update_failed",
+      "Unable to finalize account verification claims right now."
+    );
+  }
 }
 
 /**
@@ -301,26 +529,7 @@ export async function ensureVerifiedVolunteerUser(
   }
 
   if (!existing || !existing.emailVerified || !existing.inviteVerified) {
-    const updateResp = await fetchImpl(`${baseUrl}/accounts:update`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        localId: uid,
-        emailVerified: true,
-        customAttributes: JSON.stringify({ inviteVerified: true }),
-      }),
-    });
-
-    if (!updateResp.ok) {
-      throw new HttpError(
-        502,
-        "firebase_claims_update_failed",
-        "Unable to finalize account verification claims right now."
-      );
-    }
+    await grantInviteVerifiedByUid(sa, uid, fetchImpl);
   }
 
   return uid;

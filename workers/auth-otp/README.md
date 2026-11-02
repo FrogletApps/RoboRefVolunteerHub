@@ -9,7 +9,9 @@ Standalone Cloudflare Worker (`workers/auth-otp/`) providing:
   - **Per-IP Cap**: Max 5 requests/minute and 20 requests/hour (`CF-Connecting-IP`).
   - **Global Daily Circuit Breaker**: Hard cap of 150 emails/day (`MAX_DAILY_EMAILS_GLOBAL = 150`).
   - **Pre-Send Gatekeeping**: Cloudflare Turnstile + invite code check (for new users) or Firebase Auth account check (for returning users) *before* `env.EMAIL.send()` is ever called.
-- **Firebase Custom Token Minting**: Issues `RS256` custom tokens with `{ inviteVerified: true }` and sets persistent Firebase Auth custom claims so device sessions stay logged in indefinitely across restarts.
+- **Firebase Custom Token Minting & Google Invite Claiming**:
+  - `POST /api/auth/request-otp` + `POST /api/auth/verify-otp`: Issues `RS256` custom tokens with `{ inviteVerified: true }` and sets persistent Firebase Auth custom claims so device sessions stay logged in indefinitely across restarts.
+  - `POST /api/auth/claim-invite`: Cryptographically verifies a caller's Firebase ID Token (RS256 against Google's public JWKS) and invitation code for first-time **Continue with Google** users before stamping `{ inviteVerified: true }` (sends 0 emails).
 
 ## Production Deployment Steps
 

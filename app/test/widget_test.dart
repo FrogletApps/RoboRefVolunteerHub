@@ -70,6 +70,27 @@ void main() {
         );
       }
 
+      if (request.url.path == '/api/auth/claim-invite') {
+        if (body['inviteCode'] != 'UKVEX-2026') {
+          return http.Response(
+            jsonEncode({
+              'ok': false,
+              'error': 'invalid_invite_code',
+              'message': 'Invalid invitation code.',
+            }),
+            403,
+          );
+        }
+        return http.Response(
+          jsonEncode({
+            'ok': true,
+            'uid': 'google-uid-test',
+            'email': 'google.volunteer@example.co.uk',
+          }),
+          200,
+        );
+      }
+
       return http.Response('Not Found', 404);
     });
   }
@@ -97,6 +118,7 @@ void main() {
 
     expect(find.text('RoboRef Volunteer Hub'), findsOneWidget);
     expect(find.byKey(const Key('auth_mode_selector')), findsOneWidget);
+    expect(find.byKey(const Key('google_signin_button')), findsOneWidget);
     expect(find.byKey(const Key('login_email_input')), findsOneWidget);
     expect(find.byKey(const Key('request_otp_button')), findsOneWidget);
 
@@ -252,5 +274,59 @@ void main() {
       find.widgetWithText(AppBar, 'RoboRef Volunteer Hub'),
       findsOneWidget,
     );
+  });
+
+  testWidgets(
+      'Uninvited Google Sign-In switches to New Volunteer tab, then valid invite + Google pre-fills onboarding',
+      (WidgetTester tester) async {
+    tester.view.physicalSize = const Size(1000, 1400);
+    tester.view.devicePixelRatio = 1.0;
+    addTearDown(tester.view.resetPhysicalSize);
+
+    final authBackend = InMemoryAuthBackend(
+      mockGoogleUid: 'google-uid-test',
+      mockGoogleEmail: 'priya@example.co.uk',
+      mockGoogleDisplayName: 'Priya Patel',
+      mockGoogleInviteVerified: false,
+    );
+    addTearDown(authBackend.dispose);
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          authBackendProvider.overrideWithValue(authBackend),
+          otpAuthApiClientProvider.overrideWithValue(
+            OtpAuthApiClient(httpClient: buildMockOtpApi(otpStore: {})),
+          ),
+          signupStoreProvider.overrideWithValue(InMemorySignupStore()),
+          vexEventsServiceProvider.overrideWithValue(
+            VexEventsService(
+              client: MockClient((_) async => http.Response('Offline', 503)),
+            ),
+          ),
+        ],
+        child: const RoboRefVolunteerHubApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // Tapping Continue with Google on Sign In tab without an invite redirects to New Volunteer tab
+    await tester.tap(find.byKey(const Key('google_signin_button')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('invite_code_input')), findsOneWidget);
+
+    // Enter invite code and tap Verify Invite & Continue with Google
+    await tester.enterText(
+      find.byKey(const Key('invite_code_input')),
+      'UKVEX-2026',
+    );
+    await tester.tap(find.byKey(const Key('google_signin_button')));
+    await tester.pumpAndSettle();
+
+    // Routed to Volunteer Registration with Google email & displayName pre-filled
+    expect(find.text('Volunteer Registration'), findsOneWidget);
+    expect(find.text('Verified Email: priya@example.co.uk'), findsOneWidget);
+    expect(find.text('Priya Patel'), findsOneWidget);
   });
 }

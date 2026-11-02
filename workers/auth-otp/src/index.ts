@@ -8,9 +8,11 @@ import {
 import { sendOtpEmail } from "./email.ts";
 import {
   ensureVerifiedVolunteerUser,
+  grantInviteVerifiedByUid,
   lookupFirebaseUserByEmail,
   mintFirebaseCustomToken,
   parseServiceAccount,
+  verifyFirebaseIdToken,
 } from "./firebaseAdmin.ts";
 import {
   checkEmailSendQuota,
@@ -21,6 +23,7 @@ import {
 } from "./rateLimit.ts";
 import { verifyTurnstileToken } from "./turnstile.ts";
 import type {
+  ClaimInviteBody,
   Env,
   RequestOtpBody,
   StoredOtpRecord,
@@ -40,15 +43,25 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
     .map((o) => o.trim())
     .filter((o) => o.length > 0);
 
+  const allowsLocalhost = allowedList.some((o) =>
+    /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)
+  );
+  const isOriginLocalhost = Boolean(
+    origin && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+  );
+
   const allowOrigin =
-    origin && (allowedList.includes(origin) || allowedList.includes("*"))
+    origin &&
+    (allowedList.includes(origin) ||
+      allowedList.includes("*") ||
+      (allowsLocalhost && isOriginLocalhost))
       ? origin
       : allowedList[0] ?? "https://volunteer.roboref.app";
 
   return {
     "Access-Control-Allow-Origin": allowOrigin,
     "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization",
     "Access-Control-Max-Age": "86400",
     Vary: "Origin",
   };
@@ -368,6 +381,98 @@ async function handleVerifyOtp(
   };
 }
 
+/**
+ * Verifies an invitation code for a first-time Federated (e.g. Sign in with Google)
+ * volunteer, cryptographically validates their Firebase ID Token (RS256 against
+ * Google's public JWKS), and stamps persistent `inviteVerified: true` onto their
+ * Firebase Auth account. Sends ZERO emails.
+ */
+async function handleClaimInvite(
+  request: Request,
+  env: Env,
+  deps: WorkerDeps
+): Promise<Record<string, unknown>> {
+  if (!env.OTP_HMAC_SECRET) {
+    throw new HttpError(
+      500,
+      "server_misconfigured",
+      "OTP_HMAC_SECRET is not configured."
+    );
+  }
+
+  let body: Partial<ClaimInviteBody>;
+  try {
+    body = (await request.json()) as Partial<ClaimInviteBody>;
+  } catch {
+    throw new HttpError(400, "invalid_json", "Invalid JSON request body.");
+  }
+
+  const authHeader = request.headers.get("Authorization") ?? "";
+  const bearerToken = authHeader.startsWith("Bearer ")
+    ? authHeader.slice(7).trim()
+    : "";
+  const idToken = (bearerToken || body.idToken || "").trim();
+  if (!idToken) {
+    throw new HttpError(
+      401,
+      "missing_id_token",
+      "Missing Firebase authentication token."
+    );
+  }
+
+  const now = deps.now ? deps.now() : new Date();
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const clientIp =
+    request.headers.get("CF-Connecting-IP") ??
+    request.headers.get("X-Forwarded-For")?.split(",")[0]?.trim() ??
+    "unknown-ip";
+
+  const ipHash = await hmacSha256Hex(env.OTP_HMAC_SECRET, `ip:${clientIp}`);
+  const rateConfig = parseRateLimitConfig(env);
+
+  // Layer 1: Per-IP brute-force protection (5/min, 20/hr)
+  await enforceAndRecordRequestIpLimit(
+    env.AUTH_OTP_KV,
+    ipHash,
+    rateConfig,
+    now
+  );
+
+  // Layer 2: Optional Cloudflare Turnstile bot check
+  await verifyTurnstileToken(env, body.turnstileToken, clientIp, fetchImpl);
+
+  // Layer 3: Constant-time invite code verification BEFORE calling Firebase
+  const validInvite = await verifyInviteCodeConstantTime(
+    body.inviteCode,
+    env.INVITE_CODES
+  );
+  if (!validInvite) {
+    throw new HttpError(
+      403,
+      "invalid_invite_code",
+      "Invalid invitation code. Access to RoboRef Volunteer Hub is invite-only."
+    );
+  }
+
+  // Layer 4: Cryptographically verify caller's Firebase ID Token (RS256 JWKS)
+  const serviceAccount = parseServiceAccount(env.FIREBASE_SERVICE_ACCOUNT_JSON);
+  const verified = await verifyFirebaseIdToken(
+    serviceAccount,
+    idToken,
+    fetchImpl,
+    Math.floor(now.getTime() / 1000)
+  );
+
+  // Layer 5: Stamp persistent `inviteVerified: true` onto caller's Firebase Auth UID
+  await grantInviteVerifiedByUid(serviceAccount, verified.uid, fetchImpl);
+
+  return {
+    ok: true,
+    uid: verified.uid,
+    email: verified.email,
+  };
+}
+
 export async function handleWorkerRequest(
   request: Request,
   env: Env,
@@ -389,6 +494,11 @@ export async function handleWorkerRequest(
 
     if (request.method === "POST" && url.pathname === "/api/auth/verify-otp") {
       const result = await handleVerifyOtp(request, env, deps);
+      return jsonResponse(200, result, corsHeaders);
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/claim-invite") {
+      const result = await handleClaimInvite(request, env, deps);
       return jsonResponse(200, result, corsHeaders);
     }
 

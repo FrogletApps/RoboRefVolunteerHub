@@ -6,10 +6,12 @@ import '../state/auth_provider.dart';
 
 class SignupScreen extends ConsumerStatefulWidget {
   final String verifiedEmail;
+  final String? initialName;
 
   const SignupScreen({
     super.key,
     required this.verifiedEmail,
+    this.initialName,
   });
 
   @override
@@ -18,7 +20,7 @@ class SignupScreen extends ConsumerStatefulWidget {
 
 class _SignupScreenState extends ConsumerState<SignupScreen> {
   final _formKey = GlobalKey<FormState>();
-  final _nameController = TextEditingController();
+  late final TextEditingController _nameController;
   final _phoneController = TextEditingController();
 
   final Set<String> _selectedQualifications = {'head_ref', 'ref'};
@@ -26,6 +28,12 @@ class _SignupScreenState extends ConsumerState<SignupScreen> {
   final bool _isEmailPublic = false;
   final bool _forwardingEnabled = false;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _nameController = TextEditingController(text: widget.initialName ?? '');
+  }
 
   @override
   void dispose() {

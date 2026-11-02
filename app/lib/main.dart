@@ -74,6 +74,7 @@ class _AuthGateRouter extends ConsumerWidget {
       case AuthGateStatus.needsOnboarding:
         return SignupScreen(
           verifiedEmail: gate.session?.email ?? '',
+          initialName: gate.session?.displayName,
         );
       case AuthGateStatus.authenticated:
         return const EventsListScreen();

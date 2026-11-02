@@ -6,14 +6,14 @@
 
 **RoboRef Volunteer Hub** is an unofficial volunteer management and event coordination application built specifically for VEX Robotics competitions (**V5RC**, **VIQRC**, and **VEX U**), initially focused on the **United Kingdom**.
 
-It allows invited volunteers to authenticate via passwordless **6-digit Email OTP**, declare their certified qualifications, keep personal contact details strictly isolated from public rosters, and mark themselves as **Available** or **Confirmed** for UK events fetched directly from the official **VEX Events API** (`events.vex.com`).
+It allows invited volunteers to authenticate via **Continue with Google** or passwordless **6-digit Email OTP**, declare their certified qualifications, keep personal contact details strictly isolated from public rosters, and mark themselves as **Available** or **Confirmed** for UK events fetched directly from the official **VEX Events API** (`events.vex.com`).
 
 ---
 
 ## ✨ Key Features
 
-- 🔐 **Passwordless 6-Digit Email OTP & Persistent Device Sessions**:
-  - Invite-only new volunteer onboarding verified server-side against encrypted Cloudflare Secrets (`INVITE_CODES`).
+- 🔐 **Passwordless Auth (Google + 6-Digit Email OTP) & Persistent Sessions**:
+  - Invite-only new volunteer onboarding verified server-side against encrypted Cloudflare Secrets (`INVITE_CODES`) for both Google Sign-In and Email OTP.
   - Native **Cloudflare Email Service** (`send_email`) delivery protected by 4-layer rate limiting (60s cooldown, **12 emails/day per user**, per-IP cap, Cloudflare Turnstile, and a global daily circuit breaker).
   - Persistent device sessions via **Firebase Authentication** (`Persistence.LOCAL` on Web, Keychain on iOS, Keystore on Android) so volunteers stay signed in across weeks/months until explicit logout.
 - 🛡️ **Zero-PII Roster Architecture**:

@@ -89,6 +89,43 @@ void main() {
           );
         }
 
+        if (request.url.path == '/api/auth/claim-invite') {
+          final authHeader = request.headers['authorization'] ??
+              request.headers['Authorization'] ??
+              '';
+          if (!authHeader.startsWith('Bearer ') ||
+              authHeader.substring(7).trim().isEmpty) {
+            return http.Response(
+              jsonEncode({
+                'ok': false,
+                'error': 'missing_id_token',
+                'message': 'Missing Firebase authentication token.',
+              }),
+              401,
+            );
+          }
+          final code = (body['inviteCode'] as String? ?? '').toUpperCase();
+          if (!validInviteCodes.contains(code)) {
+            return http.Response(
+              jsonEncode({
+                'ok': false,
+                'error': 'invalid_invite_code',
+                'message':
+                    'Invalid invitation code. Access to RoboRef Volunteer Hub is invite-only.',
+              }),
+              403,
+            );
+          }
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'uid': backend.mockGoogleUid,
+              'email': backend.mockGoogleEmail,
+            }),
+            200,
+          );
+        }
+
         return http.Response('Not Found', 404);
       });
 
@@ -251,6 +288,40 @@ void main() {
         ),
         returnsNormally,
       );
+    });
+
+    test(
+        'Google Sign-In blocks uninvited accounts on Sign In and grants access after valid invite claim',
+        () async {
+      final authService = buildAuthService();
+
+      // 1. Unverified Google user on Sign In tab is signed out & prompted for invite code
+      await expectLater(
+        () => authService.signInWithGoogle(),
+        throwsA(
+          isA<AuthApiException>()
+              .having((e) => e.code, 'code', 'invite_required'),
+        ),
+      );
+      expect(authService.currentSession, isNull);
+
+      // 2. Wrong invite code on joinWithGoogle is rejected and cleans up session
+      await expectLater(
+        () => authService.joinWithGoogle(inviteCode: 'BAD-INVITE'),
+        throwsA(
+          isA<AuthApiException>()
+              .having((e) => e.code, 'code', 'invalid_invite_code'),
+        ),
+      );
+      expect(authService.currentSession, isNull);
+
+      // 3. Valid invite code stamps inviteVerified == true and establishes session with 0 OTP emails
+      final session =
+          await authService.joinWithGoogle(inviteCode: 'ukvex-2026');
+      expect(session.inviteVerified, isTrue);
+      expect(session.email, equals('google.volunteer@example.co.uk'));
+      expect(session.displayName, equals('Google Volunteer'));
+      expect(issuedOtps, isEmpty);
     });
   });
 }

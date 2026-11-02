@@ -78,7 +78,7 @@ class AuthController extends StateNotifier<AuthGateState> {
 
   Future<void> _handleSessionChanged(AuthSession? session) async {
     final generation = ++_sessionGeneration;
-    if (session == null) {
+    if (session == null || !session.inviteVerified) {
       state = const AuthGateState.unauthenticated();
       return;
     }
@@ -130,6 +130,22 @@ class AuthController extends StateNotifier<AuthGateState> {
     final session = await _authService.verifyOtpAndSignIn(
       email: email,
       code: code,
+    );
+    await _handleSessionChanged(session);
+  }
+
+  Future<void> signInWithGoogle() async {
+    final session = await _authService.signInWithGoogle();
+    await _handleSessionChanged(session);
+  }
+
+  Future<void> joinWithGoogle({
+    required String inviteCode,
+    String? turnstileToken,
+  }) async {
+    final session = await _authService.joinWithGoogle(
+      inviteCode: inviteCode,
+      turnstileToken: turnstileToken,
     );
     await _handleSessionChanged(session);
   }

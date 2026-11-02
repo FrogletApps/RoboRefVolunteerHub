@@ -170,6 +170,40 @@ class OtpAuthApiClient {
     );
   }
 
+  /// Verifies an invitation code on the Cloudflare Worker for a federated
+  /// (Google Sign-In) user and stamps `inviteVerified: true` on their Firebase UID.
+  Future<void> claimInvite({
+    required String idToken,
+    required String inviteCode,
+    String? turnstileToken,
+  }) async {
+    final uri = _buildUri('/api/auth/claim-invite');
+    final payload = <String, dynamic>{
+      'inviteCode': inviteCode.trim().toUpperCase(),
+      if (turnstileToken != null && turnstileToken.trim().isNotEmpty)
+        'turnstileToken': turnstileToken.trim(),
+    };
+
+    final response = await _httpClient.post(
+      uri,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${idToken.trim()}',
+      },
+      body: jsonEncode(payload),
+    );
+
+    final data = _decodeJsonMap(response.body);
+    if (response.statusCode != 200 || data['ok'] != true) {
+      throw AuthApiException(
+        code: data['error'] as String? ?? 'claim_invite_failed',
+        message: data['message'] as String? ??
+            'Unable to verify invitation code right now. Please try again.',
+        retryAfterSeconds: data['retryAfterSeconds'] as int?,
+      );
+    }
+  }
+
   Map<String, dynamic> _decodeJsonMap(String raw) {
     try {
       final decoded = jsonDecode(raw);
