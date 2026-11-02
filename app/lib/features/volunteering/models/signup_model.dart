@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../../profile/models/volunteer_model.dart';
 import '../../../core/constants/roles.dart';
@@ -47,6 +48,11 @@ class EventSignupModel {
     required this.updatedAt,
   });
 
+  /// Deterministic composite document ID enforced by `firestore.rules`.
+  static String buildCompositeId(String sku, String volunteerId) {
+    return '${sku.trim().toUpperCase()}_$volunteerId';
+  }
+
   bool get isConfirmed => status == SignupStatus.confirmed;
   bool get isAvailable => status == SignupStatus.available;
 
@@ -79,6 +85,58 @@ class EventSignupModel {
       notes: notes ?? this.notes,
       volunteer: volunteer ?? this.volunteer,
       updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  /// Roster-safe Firestore payload (`event_signups/{sku}_{uid}`) — strictly zero PII.
+  /// Matches `isValidEventSignup(signupId)` in `firestore.rules`.
+  Map<String, dynamic> toFirestoreMap({Object? updatedAtTimestamp}) {
+    final cleanSku = sku.trim().toUpperCase();
+    final docId = buildCompositeId(cleanSku, volunteerId);
+    final cleanOther = otherRoleDescription?.trim();
+    final cleanNotes = notes?.trim();
+
+    return {
+      'id': docId,
+      'sku': cleanSku,
+      'volunteerId': volunteerId,
+      'volunteerName': volunteerName.trim(),
+      'status': status.id,
+      'epVerified': false,
+      'offeredRoles': offeredRoles,
+      'otherRoleDescription':
+          (cleanOther != null && cleanOther.isNotEmpty) ? cleanOther : null,
+      'notes': (cleanNotes != null && cleanNotes.isNotEmpty) ? cleanNotes : null,
+      'updatedAt': updatedAtTimestamp ?? FieldValue.serverTimestamp(),
+    };
+  }
+
+  factory EventSignupModel.fromFirestoreMap(
+    String docId,
+    Map<String, dynamic> data,
+  ) {
+    DateTime parsedUpdated = DateTime.now();
+    final rawUpdated = data['updatedAt'];
+    if (rawUpdated is Timestamp) {
+      parsedUpdated = rawUpdated.toDate();
+    } else if (rawUpdated is String) {
+      parsedUpdated = DateTime.tryParse(rawUpdated) ?? DateTime.now();
+    }
+
+    return EventSignupModel(
+      id: data['id'] as String? ?? docId,
+      sku: data['sku'] as String? ?? '',
+      volunteerId: data['volunteerId'] as String? ?? '',
+      volunteerName: data['volunteerName'] as String? ?? 'Volunteer',
+      status: SignupStatus.fromId(data['status'] as String? ?? 'available'),
+      epVerified: data['epVerified'] as bool? ?? false,
+      offeredRoles: (data['offeredRoles'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      otherRoleDescription: data['otherRoleDescription'] as String?,
+      notes: data['notes'] as String?,
+      updatedAt: parsedUpdated,
     );
   }
 

@@ -4,17 +4,31 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import 'package:roboref_volunteer_hub/main.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/services/auth_service.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/services/otp_auth_api_client.dart';
 import 'package:roboref_volunteer_hub/features/auth_invites/state/auth_provider.dart';
 import 'package:roboref_volunteer_hub/features/events/services/vex_events_service.dart';
 import 'package:roboref_volunteer_hub/features/events/state/events_provider.dart';
 import 'package:roboref_volunteer_hub/features/profile/models/volunteer_model.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/models/signup_model.dart';
+import 'package:roboref_volunteer_hub/features/volunteering/services/volunteer_repository.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/state/volunteering_provider.dart';
 
 void main() {
   late MockClient offlineClient;
+
+  const alexSession = AuthSession(
+    uid: 'vol-alex-turner',
+    email: 'alex.turner@example.org',
+  );
+  const alexVolunteer = VolunteerModel(
+    id: 'vol-alex-turner',
+    name: 'Alex Turner',
+    email: 'alex.turner@example.org',
+    qualifications: ['head_ref', 'ref'],
+    forwardingAddress: 'vol-alex102@volunteer.roboref.app',
+  );
 
   setUp(() {
     offlineClient = MockClient((_) async => http.Response('Offline', 503));
@@ -102,38 +116,56 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
 
-    SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
+    final authBackend = InMemoryAuthBackend(
+      initialSession: alexSession,
+      initialProfile: alexVolunteer,
+    );
+    addTearDown(authBackend.dispose);
+
+    final signupStore = InMemorySignupStore(
+      initialSignups: [
+        EventSignupModel(
+          id: 'RE-V5RC-26-9102_vol-alex-turner',
+          sku: 'RE-V5RC-26-9102',
+          volunteerId: alexVolunteer.id,
+          volunteerName: alexVolunteer.name,
+          status: SignupStatus.confirmed,
+          offeredRoles: const ['head_ref'],
+          updatedAt: DateTime(2026, 11, 1),
+        ),
+        EventSignupModel(
+          id: 'RE-VIQRC-26-8821_vol-alex-turner',
+          sku: 'RE-VIQRC-26-8821',
+          volunteerId: alexVolunteer.id,
+          volunteerName: alexVolunteer.name,
+          status: SignupStatus.available,
+          offeredRoles: const ['ref'],
+          updatedAt: DateTime(2026, 11, 1),
+        ),
+        EventSignupModel(
+          id: 'RE-V5RC-26-7734_vol-alex-turner',
+          sku: 'RE-V5RC-26-7734',
+          volunteerId: alexVolunteer.id,
+          volunteerName: alexVolunteer.name,
+          status: SignupStatus.available,
+          offeredRoles: const ['ref'],
+          updatedAt: DateTime(2026, 11, 1),
+        ),
+      ],
+    );
 
     final container = ProviderContainer(
       overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
+        authBackendProvider.overrideWithValue(authBackend),
+        otpAuthApiClientProvider.overrideWithValue(
+          OtpAuthApiClient(httpClient: offlineClient),
+        ),
+        signupStoreProvider.overrideWithValue(signupStore),
         vexEventsServiceProvider
             .overrideWithValue(VexEventsService(client: offlineClient)),
       ],
     );
     addTearDown(container.dispose);
-
-    // Log in as Alex Turner (pre-seeded Confirmed for RE-V5RC-26-9102)
-    await container.read(currentVolunteerProvider.notifier).login(
-          email: 'alex.turner@example.org',
-          password: 'Password123!',
-        );
-
-    final alex = container.read(currentVolunteerProvider)!;
-    // Also sign Alex up as Available for one VIQRC event and one V5RC event
-    await container.read(volunteerRepositoryProvider).saveSignup(
-          sku: 'RE-VIQRC-26-8821',
-          volunteer: alex,
-          status: SignupStatus.available,
-          offeredRoles: ['ref'],
-        );
-    await container.read(volunteerRepositoryProvider).saveSignup(
-          sku: 'RE-V5RC-26-7734',
-          volunteer: alex,
-          status: SignupStatus.available,
-          offeredRoles: ['ref'],
-        );
 
     await tester.pumpWidget(
       UncontrolledProviderScope(
@@ -143,7 +175,6 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // Verify single-line layout with vertical divider and Clear on the far right
     expect(find.byKey(const Key('filters_single_line_layout')), findsOneWidget);
     expect(
       find.byKey(const Key('event_filters_vertical_divider')),
@@ -160,12 +191,10 @@ void main() {
     final group3Rect =
         tester.getRect(find.byKey(const Key('filter_group_clear')));
 
-    // Horizontal ordering: Group 1 -> Vertical Divider -> Group 2 -> Clear (far right)
     expect(dividerRect.left, greaterThanOrEqualTo(group1Rect.right));
     expect(group2Rect.left, greaterThanOrEqualTo(dividerRect.right));
     expect(group3Rect.left, greaterThan(group2Rect.right));
 
-    // Same horizontal row (matching vertical centers)
     expect((group1Rect.center.dy - group2Rect.center.dy).abs(), lessThan(4));
     expect((group2Rect.center.dy - group3Rect.center.dy).abs(), lessThan(4));
 
@@ -225,22 +254,24 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
 
-    SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
+    final authBackend = InMemoryAuthBackend(
+      initialSession: alexSession,
+      initialProfile: alexVolunteer,
+    );
+    addTearDown(authBackend.dispose);
 
     final container = ProviderContainer(
       overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
+        authBackendProvider.overrideWithValue(authBackend),
+        otpAuthApiClientProvider.overrideWithValue(
+          OtpAuthApiClient(httpClient: offlineClient),
+        ),
+        signupStoreProvider.overrideWithValue(InMemorySignupStore()),
         vexEventsServiceProvider
             .overrideWithValue(VexEventsService(client: offlineClient)),
       ],
     );
     addTearDown(container.dispose);
-
-    await container.read(currentVolunteerProvider.notifier).login(
-          email: 'alex.turner@example.org',
-          password: 'Password123!',
-        );
 
     await tester.pumpWidget(
       UncontrolledProviderScope(
@@ -284,13 +315,11 @@ void main() {
     final divider2Center = tester.getCenter(divider2);
     final clearCenter = tester.getCenter(clearButton);
 
-    // Strictly stacked with horizontal lines between each group
     expect(group1Center.dy, lessThan(divider1Center.dy));
     expect(divider1Center.dy, lessThan(group2Center.dy));
     expect(group2Center.dy, lessThan(divider2Center.dy));
     expect(divider2Center.dy, lessThan(clearCenter.dy));
 
-    // All three groups and horizontal lines are horizontally centre-aligned
     const midpoint = screenWidth / 2;
     expect((group1Center.dx - midpoint).abs(), lessThan(2.0));
     expect((divider1Center.dx - midpoint).abs(), lessThan(2.0));
@@ -305,29 +334,36 @@ void main() {
     tester.view.devicePixelRatio = 1.0;
     addTearDown(tester.view.resetPhysicalSize);
 
-    SharedPreferences.setMockInitialValues({});
-    final prefs = await SharedPreferences.getInstance();
-
+    const newSession = AuthSession(
+      uid: 'vol-new-user',
+      email: 'new@example.org',
+    );
     const newUser = VolunteerModel(
       id: 'vol-new-user',
       name: 'New Volunteer',
       email: 'new@example.org',
       qualifications: ['ref'],
-      forwardingAddress: 'vol-new@volunteer.roboref.app',
+      forwardingAddress: 'vol-new00000@volunteer.roboref.app',
     );
+
+    final authBackend = InMemoryAuthBackend(
+      initialSession: newSession,
+      initialProfile: newUser,
+    );
+    addTearDown(authBackend.dispose);
 
     final container = ProviderContainer(
       overrides: [
-        sharedPreferencesProvider.overrideWithValue(prefs),
+        authBackendProvider.overrideWithValue(authBackend),
+        otpAuthApiClientProvider.overrideWithValue(
+          OtpAuthApiClient(httpClient: offlineClient),
+        ),
+        signupStoreProvider.overrideWithValue(InMemorySignupStore()),
         vexEventsServiceProvider
             .overrideWithValue(VexEventsService(client: offlineClient)),
       ],
     );
     addTearDown(container.dispose);
-
-    await container
-        .read(currentVolunteerProvider.notifier)
-        .updateProfile(newUser);
 
     await tester.pumpWidget(
       UncontrolledProviderScope(

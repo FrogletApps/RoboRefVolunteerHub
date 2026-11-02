@@ -1,0 +1,301 @@
+rules_version = '2';
+
+// ===============================================================
+// Assumed Data Model — RoboRef Volunteer Hub (v1)
+// ===============================================================
+//
+// Authentication & Authority Model:
+//   - All authorized users in v1 authenticate via a Firebase Custom Token
+//     minted by the RoboRef Cloudflare Worker after invite-code + 6-digit
+//     Email OTP verification.
+//   - Every authorized user carries custom claim:
+//       request.auth != null && request.auth.token.inviteVerified == true
+//   - Contact privacy toggles (isEmailPublic, isPhonePublic, forwardingEnabled)
+//     and Event Partner privileges (isEventPartner, epVerified) are strictly
+//     locked to `false` in v1.
+//   - Personal PII (email, phone) is NEVER stored in roster-readable
+//     collections (`volunteers`, `event_signups`); it is strictly isolated in
+//     owner-only `volunteer_private/{uid}`.
+//
+// Collection 1: volunteers/{uid} (Roster-visible volunteer profile — NO PII)
+// Document ID: {uid} (must equal request.auth.uid)
+// Fields:
+//   - id: string (required, immutable, == uid, 1..128 chars)
+//   - name: string (required, 1..100 chars) - display name
+//   - qualifications: list<string> (required, 1..10 items, allowed values:
+//       ['head_ref', 'ref', 'judge_advisor', 'judge', 'other'])
+//   - forwardingAddress: string (required, 10..100 chars) - relay alias
+//   - isEmailPublic: bool (required, locked == false in v1)
+//   - isPhonePublic: bool (required, locked == false in v1)
+//   - forwardingEnabled: bool (required, locked == false in v1)
+//   - isEventPartner: bool (required, locked == false in v1)
+//   - certifications: string | null (optional, if string <= 500 chars)
+//   - updatedAt: timestamp (required)
+//
+// Collection 2: volunteer_private/{uid} (Strictly owner-only PII)
+// Document ID: {uid} (must equal request.auth.uid; collection listing denied)
+// Fields:
+//   - email: string (required, 3..254 chars) - private volunteer email
+//   - phone: string | null (optional, if string <= 40 chars) - private phone
+//   - updatedAt: timestamp (required)
+//
+// Collection 3: event_signups/{signupId} (Event availability & roster — NO PII)
+// Document ID: {signupId} (composite key: `${sku}_${volunteerId}`)
+// Fields:
+//   - id: string (required, immutable, == signupId, 5..170 chars)
+//   - sku: string (required, immutable, 3..40 chars) - VEX Event SKU
+//   - volunteerId: string (required, immutable, == request.auth.uid, 1..128 chars)
+//   - volunteerName: string (required, 1..100 chars) - denormalized display name
+//   - status: string (required, in ['available', 'confirmed'])
+//   - epVerified: bool (required, locked == false in v1)
+//   - offeredRoles: list<string> (required, 1..10 items, allowed values:
+//       ['head_ref', 'ref', 'judge_advisor', 'judge', 'other'])
+//   - otherRoleDescription: string | null (optional, if string <= 120 chars)
+//   - notes: string | null (optional, if string <= 500 chars)
+//   - updatedAt: timestamp (required)
+//
+// ===============================================================
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    // Check if the request has a valid Firebase Auth context
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    // Check if the authenticated user holds a Worker-minted inviteVerified claim
+    function isVerifiedVolunteer() {
+      return isAuthenticated() &&
+             'inviteVerified' in request.auth.token &&
+             request.auth.token.inviteVerified is bool &&
+             request.auth.token.inviteVerified == true;
+    }
+
+    // Check if the verified volunteer owns a path-keyed user resource
+    function isOwner(userId) {
+      return isVerifiedVolunteer() && request.auth.uid == userId;
+    }
+
+    // Verify ownership UID field matches the authenticated user on create/write
+    function uidUnchanged(field) {
+      return field in request.resource.data &&
+             request.resource.data[field] is string &&
+             request.resource.data[field] == request.auth.uid;
+    }
+
+    // Ensure ownership UID field is not modified on update
+    function uidNotModified(field) {
+      return !(field in resource.data) ||
+             request.resource.data[field] == resource.data[field];
+    }
+
+    // Validate that the document contains ONLY explicitly allowed keys
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Validate that all required keys are present in the resulting document
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    // Validate that specified fields have not been modified during an update
+    function areImmutableFieldsUnchanged(fields) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(fields);
+    }
+
+    // Validate bounded non-optional string field
+    function isValidString(val, minLen, maxLen) {
+      return val is string &&
+             val.size() >= minLen &&
+             val.size() <= maxLen;
+    }
+
+    // Validate optional/nullable string field (omitted, null, or bounded string)
+    function isValidOptionalString(data, field, maxLen) {
+      return !(field in data) ||
+             data[field] == null ||
+             (data[field] is string && data[field].size() <= maxLen);
+    }
+
+    // Validate a boolean flag strictly locked to false in v1
+    function isLockedFalse(val) {
+      return val is bool && val == false;
+    }
+
+    // Validate non-empty bounded role list against official VEX volunteer roles
+    function isValidRoleList(roles) {
+      return roles is list &&
+             roles.size() >= 1 &&
+             roles.size() <= 10 &&
+             roles.hasOnly(['head_ref', 'ref', 'judge_advisor', 'judge', 'other']);
+    }
+
+    // ===============================================================
+    // Domain Validators (Invoked on BOTH create and update)
+    // ===============================================================
+
+    function isValidVolunteerProfile(uid) {
+      let data = request.resource.data;
+      let allowedKeys = [
+        'id',
+        'name',
+        'qualifications',
+        'forwardingAddress',
+        'isEmailPublic',
+        'isPhonePublic',
+        'forwardingEnabled',
+        'isEventPartner',
+        'certifications',
+        'updatedAt'
+      ];
+      let requiredKeys = [
+        'id',
+        'name',
+        'qualifications',
+        'forwardingAddress',
+        'isEmailPublic',
+        'isPhonePublic',
+        'forwardingEnabled',
+        'isEventPartner',
+        'updatedAt'
+      ];
+
+      return hasOnlyAllowedFields(allowedKeys) &&
+             hasRequiredFields(requiredKeys) &&
+             isValidString(data.id, 1, 128) &&
+             data.id == uid &&
+             isValidString(data.name, 1, 100) &&
+             isValidRoleList(data.qualifications) &&
+             isValidString(data.forwardingAddress, 10, 100) &&
+             isLockedFalse(data.isEmailPublic) &&
+             isLockedFalse(data.isPhonePublic) &&
+             isLockedFalse(data.forwardingEnabled) &&
+             isLockedFalse(data.isEventPartner) &&
+             isValidOptionalString(data, 'certifications', 500) &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidVolunteerPrivate() {
+      let data = request.resource.data;
+      let allowedKeys = ['email', 'phone', 'updatedAt'];
+      let requiredKeys = ['email', 'updatedAt'];
+
+      return hasOnlyAllowedFields(allowedKeys) &&
+             hasRequiredFields(requiredKeys) &&
+             isValidString(data.email, 3, 254) &&
+             isValidOptionalString(data, 'phone', 40) &&
+             data.updatedAt is timestamp;
+    }
+
+    function isValidEventSignup(signupId) {
+      let data = request.resource.data;
+      let allowedKeys = [
+        'id',
+        'sku',
+        'volunteerId',
+        'volunteerName',
+        'status',
+        'epVerified',
+        'offeredRoles',
+        'otherRoleDescription',
+        'notes',
+        'updatedAt'
+      ];
+      let requiredKeys = [
+        'id',
+        'sku',
+        'volunteerId',
+        'volunteerName',
+        'status',
+        'epVerified',
+        'offeredRoles',
+        'updatedAt'
+      ];
+
+      return hasOnlyAllowedFields(allowedKeys) &&
+             hasRequiredFields(requiredKeys) &&
+             isValidString(data.id, 5, 170) &&
+             data.id == signupId &&
+             isValidString(data.sku, 3, 40) &&
+             isValidString(data.volunteerId, 1, 128) &&
+             data.volunteerId == request.auth.uid &&
+             isValidString(data.volunteerName, 1, 100) &&
+             data.status is string &&
+             data.status in ['available', 'confirmed'] &&
+             isLockedFalse(data.epVerified) &&
+             isValidRoleList(data.offeredRoles) &&
+             isValidOptionalString(data, 'otherRoleDescription', 120) &&
+             isValidOptionalString(data, 'notes', 500) &&
+             data.updatedAt is timestamp;
+    }
+
+    // ===============================================================
+    // Collection Security Rules
+    // ===============================================================
+
+    // 1. Roster-visible volunteer profile (strictly zero PII)
+    match /volunteers/{uid} {
+      allow get, list: if isVerifiedVolunteer();
+
+      allow create: if isOwner(uid) &&
+                       uidUnchanged('id') &&
+                       isValidVolunteerProfile(uid);
+
+      allow update: if isOwner(uid) &&
+                       uidNotModified('id') &&
+                       isValidVolunteerProfile(uid);
+
+      // Supports UK GDPR right-to-erasure self-service account deletion
+      allow delete: if isOwner(uid);
+    }
+
+    // 2. Strictly owner-only private contact details (PII isolated here)
+    match /volunteer_private/{uid} {
+      allow get: if isOwner(uid);
+      allow list: if false;
+
+      allow create: if isOwner(uid) &&
+                       isValidVolunteerPrivate();
+
+      allow update: if isOwner(uid) &&
+                       isValidVolunteerPrivate();
+
+      // Supports UK GDPR right-to-erasure self-service account deletion
+      allow delete: if isOwner(uid);
+    }
+
+    // 3. Per-event availability & confirmation roster
+    match /event_signups/{signupId} {
+      allow get, list: if isVerifiedVolunteer();
+
+      allow create: if isVerifiedVolunteer() &&
+                       isValidEventSignup(signupId) &&
+                       uidUnchanged('volunteerId') &&
+                       request.resource.data.volunteerId == request.auth.uid &&
+                       signupId == request.resource.data.sku + '_' + request.auth.uid;
+
+      allow update: if isVerifiedVolunteer() &&
+                       resource.data.volunteerId == request.auth.uid &&
+                       uidNotModified('volunteerId') &&
+                       areImmutableFieldsUnchanged(['sku', 'volunteerId']) &&
+                       isValidEventSignup(signupId) &&
+                       request.resource.data.volunteerId == request.auth.uid &&
+                       request.resource.data.sku == resource.data.sku &&
+                       signupId == request.resource.data.sku + '_' + request.auth.uid;
+
+      allow delete: if isVerifiedVolunteer() &&
+                       resource.data.volunteerId == request.auth.uid;
+    }
+
+    // 4. Default Deny: Explicitly reject all other collections & subcollections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

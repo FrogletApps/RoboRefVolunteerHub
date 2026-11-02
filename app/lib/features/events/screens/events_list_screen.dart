@@ -212,7 +212,7 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
 
               if (confirm == true && mounted) {
                 clearAllEventFilters(ref);
-                await ref.read(currentVolunteerProvider.notifier).logout();
+                await ref.read(authControllerProvider.notifier).logout();
               }
             },
           ),

@@ -3,9 +3,13 @@ import '../models/signup_model.dart';
 import '../services/volunteer_repository.dart';
 import '../../auth_invites/state/auth_provider.dart';
 
+final signupStoreProvider = Provider<SignupStore>((ref) {
+  return FirestoreSignupStore();
+});
+
 final volunteerRepositoryProvider = Provider<VolunteerRepository>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  return VolunteerRepository(prefs);
+  final store = ref.watch(signupStoreProvider);
+  return VolunteerRepository(store);
 });
 
 final eventSignupsProvider =

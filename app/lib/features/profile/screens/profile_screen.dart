@@ -55,7 +55,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       isEventPartner: _isEventPartner,
     );
 
-    await ref.read(currentVolunteerProvider.notifier).updateProfile(updated);
+    if (_nameController.text.trim().isEmpty || _qualifications.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please provide your name and select at least one qualification.'),
+        ),
+      );
+      return;
+    }
+
+    await ref.read(authControllerProvider.notifier).updateProfile(updated);
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -101,7 +110,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               );
 
               if (confirm == true) {
-                await ref.read(currentVolunteerProvider.notifier).logout();
+                await ref.read(authControllerProvider.notifier).logout();
+                if (context.mounted) {
+                  Navigator.of(context).popUntil((route) => route.isFirst);
+                }
               }
             },
           ),
@@ -198,7 +210,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         const SizedBox(height: 12),
                         TextField(
                           controller: _emailController,
-                          decoration: const InputDecoration(labelText: 'Email Address'),
+                          readOnly: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Verified Login Email',
+                            helperText: 'Verified via 6-digit email passcode',
+                          ),
                         ),
                         const SizedBox(height: 12),
                         TextField(

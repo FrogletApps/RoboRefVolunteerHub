@@ -1,321 +1,407 @@
-import 'dart:convert';
+import 'dart:async';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
-import '../../../core/constants/roles.dart';
-import '../../../core/utils/crypto_utils.dart';
 import '../../profile/models/volunteer_model.dart';
-import '../models/user_account.dart';
+import 'otp_auth_api_client.dart';
 
-class AuthService {
-  final SharedPreferences _prefs;
-  static const String _userKey = 'current_volunteer_profile';
-  static const String _inviteClaimedKey = 'claimed_invite_code';
-  static const String _accountsKey = 'registered_volunteer_accounts_v1';
+@immutable
+class AuthSession {
+  final String uid;
+  final String email;
 
-  AuthService(this._prefs) {
-    _sanitizeStoredUsers();
+  const AuthSession({
+    required this.uid,
+    required this.email,
+  });
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AuthSession &&
+          runtimeType == other.runtimeType &&
+          uid == other.uid &&
+          email == other.email;
+
+  @override
+  int get hashCode => Object.hash(uid, email);
+}
+
+/// Abstract backend persistence & identity contract for Firebase Auth + Firestore.
+abstract class AuthBackend {
+  AuthSession? get currentSession;
+
+  Stream<AuthSession?> authSessionChanges();
+
+  Future<AuthSession> signInWithCustomToken(
+    String customToken, {
+    String fallbackEmail = '',
+  });
+
+  Future<VolunteerModel?> fetchVolunteerProfile(AuthSession session);
+
+  Future<VolunteerModel> saveVolunteerProfile(
+    AuthSession session,
+    VolunteerModel volunteer,
+  );
+
+  Future<void> signOut();
+}
+
+/// Production backend backed by `FirebaseAuth` (persistent device session) and
+/// `Cloud Firestore` (`volunteers/{uid}` + owner-only `volunteer_private/{uid}`).
+class FirebaseAuthBackend implements AuthBackend {
+  final FirebaseAuth _firebaseAuth;
+  final FirebaseFirestore _firestore;
+
+  FirebaseAuthBackend({
+    FirebaseAuth? firebaseAuth,
+    FirebaseFirestore? firestore,
+  })  : _firebaseAuth = firebaseAuth ?? FirebaseAuth.instance,
+        _firestore = firestore ?? FirebaseFirestore.instance;
+
+  static AuthSession? _userToSession(User? user, {String fallbackEmail = ''}) {
+    if (user == null) return null;
+    return AuthSession(
+      uid: user.uid,
+      email: (user.email ?? fallbackEmail).trim().toLowerCase(),
+    );
   }
 
-  static bool _hasEnabledPrivacyOrEpInJson(Map<String, dynamic>? map) {
-    if (map == null) return false;
-    return map['isEmailPublic'] == true ||
-        map['isPhonePublic'] == true ||
-        map['forwardingEnabled'] == true ||
-        map['isEventPartner'] == true;
+  @override
+  AuthSession? get currentSession => _userToSession(_firebaseAuth.currentUser);
+
+  @override
+  Stream<AuthSession?> authSessionChanges() {
+    return _firebaseAuth.authStateChanges().map(_userToSession);
   }
 
-  /// Ensures any previously stored session or registered user accounts have
-  /// all Contact Privacy, Email Forwarding, and EP Mode settings turned off.
-  void _sanitizeStoredUsers() {
-    final rawUser = _prefs.getString(_userKey);
-    if (rawUser != null && rawUser.isNotEmpty) {
-      try {
-        final map = jsonDecode(rawUser) as Map<String, dynamic>;
-        final user = VolunteerModel.fromJson(map);
-        final sanitized = user.withDisabledPrivacyAndEpSettings();
-        if (_hasEnabledPrivacyOrEpInJson(map) || !identical(user, sanitized)) {
-          _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
-        }
-      } catch (e) {
-        debugPrint('Error sanitizing active volunteer profile: $e');
-      }
-    }
-
-    final rawAccounts = _prefs.getString(_accountsKey);
-    if (rawAccounts != null && rawAccounts.isNotEmpty) {
-      try {
-        final list = jsonDecode(rawAccounts) as List<dynamic>;
-        var changed = false;
-        final accounts = list.map((e) {
-          final accMap = e as Map<String, dynamic>;
-          final profileMap = accMap['profile'] as Map<String, dynamic>?;
-          final acc = UserAccount.fromJson(accMap);
-          final sanitizedProfile = acc.profile.withDisabledPrivacyAndEpSettings();
-          if (_hasEnabledPrivacyOrEpInJson(profileMap) ||
-              !identical(acc.profile, sanitizedProfile)) {
-            changed = true;
-            return acc.copyWith(profile: sanitizedProfile);
-          }
-          return acc;
-        }).toList();
-        if (changed) {
-          _saveAccounts(accounts);
-        }
-      } catch (e) {
-        debugPrint('Error sanitizing stored accounts: $e');
-      }
-    }
-  }
-
-  /// Validates whether an invite code is valid from the static admin list
-  bool validateInviteCode(String code) {
-    final clean = code.trim().toUpperCase();
-    return kAdminInviteCodes.contains(clean);
-  }
-
-  /// Check whether the user already has an active volunteer profile session
-  VolunteerModel? getCurrentVolunteer() {
-    final raw = _prefs.getString(_userKey);
-    if (raw == null || raw.isEmpty) return null;
-    try {
-      final map = jsonDecode(raw) as Map<String, dynamic>;
-      final volunteer = VolunteerModel.fromJson(map);
-      final sanitized = volunteer.withDisabledPrivacyAndEpSettings();
-      if (_hasEnabledPrivacyOrEpInJson(map) || !identical(volunteer, sanitized)) {
-        _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
-      }
-      return sanitized;
-    } catch (e) {
-      debugPrint('Error decoding volunteer profile: $e');
-      return null;
-    }
-  }
-
-  /// Load all registered accounts from local storage, seeding demo accounts if empty
-  List<UserAccount> _loadAccounts() {
-    final raw = _prefs.getString(_accountsKey);
-    if (raw == null || raw.isEmpty) {
-      final initialAccounts = _getPreseededDemoAccounts();
-      _saveAccounts(initialAccounts);
-      return initialAccounts;
-    }
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      var changed = false;
-      final accounts = list.map((e) {
-        final accMap = e as Map<String, dynamic>;
-        final profileMap = accMap['profile'] as Map<String, dynamic>?;
-        final acc = UserAccount.fromJson(accMap);
-        final sanitizedProfile = acc.profile.withDisabledPrivacyAndEpSettings();
-        if (_hasEnabledPrivacyOrEpInJson(profileMap) ||
-            !identical(acc.profile, sanitizedProfile)) {
-          changed = true;
-          return acc.copyWith(profile: sanitizedProfile);
-        }
-        return acc;
-      }).toList();
-      if (changed) {
-        _saveAccounts(accounts);
-      }
-      return accounts;
-    } catch (e) {
-      debugPrint('Error decoding accounts: $e');
-      return _getPreseededDemoAccounts();
-    }
-  }
-
-  /// Save accounts list to storage
-  Future<void> _saveAccounts(List<UserAccount> accounts) async {
-    final raw = jsonEncode(accounts.map((a) => a.toJson()).toList());
-    await _prefs.setString(_accountsKey, raw);
-  }
-
-  /// Find account by normalized email
-  UserAccount? findAccountByEmail(String email) {
-    final clean = email.trim().toLowerCase();
-    final accounts = _loadAccounts();
-    try {
-      return accounts.firstWhere((a) => a.email == clean);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Register a new volunteer with invite code and secure password
-  Future<VolunteerModel> signup({
-    required String inviteCode,
-    required String name,
-    required String email,
-    required String password,
-    String? phone,
-    List<String> qualifications = const [],
-    bool isEmailPublic = false,
-    bool isPhonePublic = false,
-    bool forwardingEnabled = false,
+  @override
+  Future<AuthSession> signInWithCustomToken(
+    String customToken, {
+    String fallbackEmail = '',
   }) async {
-    // 1. Enforce invite code access restriction
-    if (!validateInviteCode(inviteCode)) {
-      throw Exception(
-        'Invalid or unrecognised invite code. Access is currently invite-only.',
+    final cred = await _firebaseAuth.signInWithCustomToken(customToken);
+    final session = _userToSession(cred.user, fallbackEmail: fallbackEmail);
+    if (session == null) {
+      throw const AuthApiException(
+        code: 'firebase_signin_failed',
+        message: 'Unable to establish a device session. Please try again.',
+      );
+    }
+    return session;
+  }
+
+  @override
+  Future<VolunteerModel?> fetchVolunteerProfile(AuthSession session) async {
+    final publicRef = _firestore.collection('volunteers').doc(session.uid);
+    final privateRef =
+        _firestore.collection('volunteer_private').doc(session.uid);
+
+    final results = await Future.wait([
+      publicRef.get(),
+      privateRef.get(),
+    ]);
+
+    final publicSnap = results[0];
+    if (!publicSnap.exists || publicSnap.data() == null) {
+      return null;
+    }
+
+    final privateSnap = results[1];
+    return VolunteerModel.fromFirestoreMaps(
+      uid: session.uid,
+      publicData: publicSnap.data()!,
+      privateData: privateSnap.data(),
+      fallbackEmail: session.email,
+    ).withDisabledPrivacyAndEpSettings();
+  }
+
+  @override
+  Future<VolunteerModel> saveVolunteerProfile(
+    AuthSession session,
+    VolunteerModel volunteer,
+  ) async {
+    final sanitized = volunteer
+        .copyWith(
+          id: session.uid,
+          email: volunteer.email.trim().isNotEmpty
+              ? volunteer.email.trim().toLowerCase()
+              : session.email,
+          forwardingAddress: volunteer.forwardingAddress.isNotEmpty
+              ? volunteer.forwardingAddress
+              : VolunteerModel.generateForwardingAddress(session.uid),
+        )
+        .withDisabledPrivacyAndEpSettings();
+
+    final publicRef = _firestore.collection('volunteers').doc(session.uid);
+    final privateRef =
+        _firestore.collection('volunteer_private').doc(session.uid);
+
+    final batch = _firestore.batch();
+    batch.set(publicRef, sanitized.toPublicFirestoreMap());
+    batch.set(privateRef, sanitized.toPrivateFirestoreMap());
+    await batch.commit();
+
+    return sanitized;
+  }
+
+  @override
+  Future<void> signOut() async {
+    await _firebaseAuth.signOut();
+  }
+}
+
+/// Deterministic in-memory backend for unit and widget tests (verifies exact
+/// separation of `volunteers/{uid}` and `volunteer_private/{uid}` without network).
+class InMemoryAuthBackend implements AuthBackend {
+  AuthSession? _session;
+  final Map<String, Map<String, dynamic>> _publicDocs = {};
+  final Map<String, Map<String, dynamic>> _privateDocs = {};
+  final StreamController<AuthSession?> _controller =
+      StreamController<AuthSession?>.broadcast();
+
+  InMemoryAuthBackend({
+    AuthSession? initialSession,
+    VolunteerModel? initialProfile,
+  }) : _session = initialSession {
+    if (initialSession != null && initialProfile != null) {
+      final sanitized = initialProfile.withDisabledPrivacyAndEpSettings();
+      _publicDocs[initialSession.uid] =
+          sanitized.toPublicFirestoreMap(updatedAtTimestamp: DateTime.now());
+      _privateDocs[initialSession.uid] =
+          sanitized.toPrivateFirestoreMap(updatedAtTimestamp: DateTime.now());
+    }
+  }
+
+  Map<String, dynamic>? getStoredPublicDoc(String uid) => _publicDocs[uid];
+  Map<String, dynamic>? getStoredPrivateDoc(String uid) => _privateDocs[uid];
+
+  @override
+  AuthSession? get currentSession => _session;
+
+  @override
+  Stream<AuthSession?> authSessionChanges() async* {
+    yield _session;
+    yield* _controller.stream;
+  }
+
+  @override
+  Future<AuthSession> signInWithCustomToken(
+    String customToken, {
+    String fallbackEmail = '',
+  }) async {
+    // Allow test tokens formatted as `custom-token:<uid>:<email>` or plain strings
+    var uid = 'vol-${fallbackEmail.hashCode.abs()}';
+    var email = fallbackEmail;
+    final parts = customToken.split(':');
+    if (parts.length >= 3 && parts[0] == 'test-token') {
+      uid = parts[1];
+      email = parts.sublist(2).join(':');
+    }
+
+    final session = AuthSession(uid: uid, email: email.trim().toLowerCase());
+    _session = session;
+    _controller.add(session);
+    return session;
+  }
+
+  @override
+  Future<VolunteerModel?> fetchVolunteerProfile(AuthSession session) async {
+    final pub = _publicDocs[session.uid];
+    if (pub == null) return null;
+    final priv = _privateDocs[session.uid];
+    return VolunteerModel.fromFirestoreMaps(
+      uid: session.uid,
+      publicData: pub,
+      privateData: priv,
+      fallbackEmail: session.email,
+    ).withDisabledPrivacyAndEpSettings();
+  }
+
+  @override
+  Future<VolunteerModel> saveVolunteerProfile(
+    AuthSession session,
+    VolunteerModel volunteer,
+  ) async {
+    final sanitized = volunteer
+        .copyWith(
+          id: session.uid,
+          email: volunteer.email.trim().isNotEmpty
+              ? volunteer.email.trim().toLowerCase()
+              : session.email,
+          forwardingAddress: volunteer.forwardingAddress.isNotEmpty
+              ? volunteer.forwardingAddress
+              : VolunteerModel.generateForwardingAddress(session.uid),
+        )
+        .withDisabledPrivacyAndEpSettings();
+
+    final now = DateTime.now();
+    _publicDocs[session.uid] =
+        sanitized.toPublicFirestoreMap(updatedAtTimestamp: now);
+    _privateDocs[session.uid] =
+        sanitized.toPrivateFirestoreMap(updatedAtTimestamp: now);
+    return sanitized;
+  }
+
+  @override
+  Future<void> signOut() async {
+    _session = null;
+    _controller.add(null);
+  }
+
+  void dispose() {
+    _controller.close();
+  }
+}
+
+/// High-level authentication & profile orchestration service.
+class AuthService {
+  static final RegExp _emailRegex = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]{2,}$');
+  static final RegExp _otpRegex = RegExp(r'^\d{6}$');
+
+  final OtpAuthApiClient _apiClient;
+  final AuthBackend _backend;
+
+  AuthService({
+    required OtpAuthApiClient apiClient,
+    required AuthBackend backend,
+  })  : _apiClient = apiClient,
+        _backend = backend;
+
+  AuthSession? get currentSession => _backend.currentSession;
+
+  Stream<AuthSession?> authSessionChanges() => _backend.authSessionChanges();
+
+  Future<VolunteerModel?> fetchCurrentVolunteerProfile(AuthSession session) {
+    return _backend.fetchVolunteerProfile(session);
+  }
+
+  static String normalizeAndValidateEmail(String rawEmail) {
+    final clean = rawEmail.trim().toLowerCase();
+    if (clean.isEmpty || clean.length > 254 || !_emailRegex.hasMatch(clean)) {
+      throw const AuthApiException(
+        code: 'invalid_email',
+        message: 'Please enter a valid email address.',
+      );
+    }
+    return clean;
+  }
+
+  /// Step 1a (Returning Volunteer): Request a 6-digit OTP email.
+  Future<OtpRequestResult> requestSignInOtp({
+    required String email,
+    String? turnstileToken,
+  }) async {
+    final cleanEmail = normalizeAndValidateEmail(email);
+    return _apiClient.requestOtp(
+      mode: AuthOtpMode.login,
+      email: cleanEmail,
+      turnstileToken: turnstileToken,
+    );
+  }
+
+  /// Step 1b (New Volunteer): Verify invite code on the Cloudflare Worker and send a 6-digit OTP email.
+  Future<OtpRequestResult> requestInviteOtp({
+    required String email,
+    required String inviteCode,
+    String? turnstileToken,
+  }) async {
+    final cleanCode = inviteCode.trim().toUpperCase();
+    if (cleanCode.isEmpty) {
+      throw const AuthApiException(
+        code: 'missing_invite_code',
+        message: 'Please enter your invitation code.',
+      );
+    }
+    final cleanEmail = normalizeAndValidateEmail(email);
+    return _apiClient.requestOtp(
+      mode: AuthOtpMode.join,
+      email: cleanEmail,
+      inviteCode: cleanCode,
+      turnstileToken: turnstileToken,
+    );
+  }
+
+  /// Step 2: Verify the 6-digit OTP and sign into Firebase Auth (persisting session on device).
+  Future<AuthSession> verifyOtpAndSignIn({
+    required String email,
+    required String code,
+  }) async {
+    final cleanEmail = normalizeAndValidateEmail(email);
+    final cleanCode = code.trim();
+    if (!_otpRegex.hasMatch(cleanCode)) {
+      throw const AuthApiException(
+        code: 'invalid_code_format',
+        message: 'Please enter the 6-digit numeric verification code.',
       );
     }
 
-    // 2. Validate password strength
-    final pwValidation = CryptoUtils.validatePassword(password);
-    if (pwValidation != null) {
-      throw Exception(pwValidation);
+    final verified = await _apiClient.verifyOtp(
+      email: cleanEmail,
+      code: cleanCode,
+    );
+
+    return _backend.signInWithCustomToken(
+      verified.customToken,
+      fallbackEmail: verified.email,
+    );
+  }
+
+  /// Step 3 (New Volunteer): Create initial `volunteers/{uid}` and `volunteer_private/{uid}` profile.
+  Future<VolunteerModel> completeOnboarding({
+    required AuthSession session,
+    required String name,
+    String? phone,
+    required List<String> qualifications,
+  }) async {
+    final trimmedName = name.trim();
+    if (trimmedName.isEmpty) {
+      throw const AuthApiException(
+        code: 'invalid_name',
+        message: 'Please enter your full name.',
+      );
     }
-
-    final normalizedEmail = email.trim().toLowerCase();
-
-    // 3. Prevent duplicate accounts with same email
-    final accounts = _loadAccounts();
-    if (accounts.any((a) => a.email == normalizedEmail)) {
-      throw Exception(
-        'An account with this email address already exists. Please log in below.',
+    if (qualifications.isEmpty) {
+      throw const AuthApiException(
+        code: 'missing_qualifications',
+        message: 'Please select at least one qualification.',
       );
     }
 
-    // 4. Securely hash password with random salt and PBKDF2
-    final passwordHash = CryptoUtils.hashPassword(password);
-
-    final id = const Uuid().v4();
-
-    final volunteer = VolunteerModel(
-      id: id,
-      name: name.trim(),
-      email: normalizedEmail,
+    final initialProfile = VolunteerModel(
+      id: session.uid,
+      name: trimmedName,
+      email: session.email,
       phone: phone?.trim(),
       qualifications: qualifications,
       isEmailPublic: false,
       isPhonePublic: false,
       forwardingEnabled: false,
-      forwardingAddress: VolunteerModel.generateForwardingAddress(id),
+      forwardingAddress: VolunteerModel.generateForwardingAddress(session.uid),
       isEventPartner: false,
     );
 
-    final account = UserAccount(
-      email: normalizedEmail,
-      passwordHash: passwordHash,
-      profile: volunteer,
-      createdAt: DateTime.now(),
+    return _backend.saveVolunteerProfile(session, initialProfile);
+  }
+
+  /// Update the authenticated volunteer's profile and private contact record.
+  Future<VolunteerModel> updateProfile(VolunteerModel updated) async {
+    final session = _backend.currentSession;
+    if (session == null) {
+      throw const AuthApiException(
+        code: 'unauthenticated',
+        message: 'Your session has expired. Please sign in again.',
+      );
+    }
+    return _backend.saveVolunteerProfile(
+      session,
+      updated.withDisabledPrivacyAndEpSettings(),
     );
-
-    accounts.add(account);
-    await _saveAccounts(accounts);
-
-    // Save active session
-    await _prefs.setString(_userKey, jsonEncode(volunteer.toJson()));
-    await _prefs.setString(_inviteClaimedKey, inviteCode.trim().toUpperCase());
-    return volunteer;
   }
 
-  /// Log in with email and password, securely verifying hash in constant time
-  Future<VolunteerModel> login({
-    required String email,
-    required String password,
-  }) async {
-    final normalizedEmail = email.trim().toLowerCase();
-    final account = findAccountByEmail(normalizedEmail);
-
-    if (account == null) {
-      throw Exception('Invalid email or password.');
-    }
-
-    final isValid = CryptoUtils.verifyPassword(password, account.passwordHash);
-    if (!isValid) {
-      throw Exception('Invalid email or password.');
-    }
-
-    // Set active volunteer session
-    final sanitizedProfile = account.profile.withDisabledPrivacyAndEpSettings();
-    await _prefs.setString(_userKey, jsonEncode(sanitizedProfile.toJson()));
-    return sanitizedProfile;
-  }
-
-  /// Update the current volunteer's profile and persist to both active session & account registry
-  Future<void> updateProfile(VolunteerModel updated) async {
-    final sanitized = updated.withDisabledPrivacyAndEpSettings();
-    await _prefs.setString(_userKey, jsonEncode(sanitized.toJson()));
-
-    final accounts = _loadAccounts();
-    final index = accounts.indexWhere(
-      (a) =>
-          a.email == sanitized.email.trim().toLowerCase() ||
-          a.profile.id == sanitized.id,
-    );
-
-    if (index >= 0) {
-      accounts[index] = accounts[index].copyWith(profile: sanitized);
-      await _saveAccounts(accounts);
-    }
-  }
-
-  /// Clear the local session (log out)
+  /// Sign out and clear the remembered device session.
   Future<void> logout() async {
-    await _prefs.remove(_userKey);
-  }
-
-  /// Seed realistic demo accounts for instant testing with standard password
-  List<UserAccount> _getPreseededDemoAccounts() {
-    const demoPassword = 'Password123!';
-    final demoHash = CryptoUtils.hashPassword(
-      demoPassword,
-      salt: '7a9f8b2c4d6e1035',
-      iterations: 10000,
-    );
-
-    return [
-      UserAccount(
-        email: 'alex.turner@example.org',
-        passwordHash: demoHash,
-        createdAt: DateTime.now().subtract(const Duration(days: 30)),
-        profile: const VolunteerModel(
-          id: 'vol-alex-turner',
-          name: 'Alex Turner',
-          email: 'alex.turner@example.org',
-          phone: '+44 7700 900123',
-          qualifications: ['head_ref', 'ref'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-alex102@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-      ),
-      UserAccount(
-        email: 'sarah.j@example.co.uk',
-        passwordHash: demoHash,
-        createdAt: DateTime.now().subtract(const Duration(days: 20)),
-        profile: const VolunteerModel(
-          id: 'vol-sarah-jenkins',
-          name: 'Sarah Jenkins',
-          email: 'sarah.j@example.co.uk',
-          qualifications: ['judge_advisor', 'judge'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-sarah91@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-      ),
-      UserAccount(
-        email: 'ep@example.co.uk',
-        passwordHash: demoHash,
-        createdAt: DateTime.now().subtract(const Duration(days: 10)),
-        profile: const VolunteerModel(
-          id: 'vol-ep-lead',
-          name: 'Event Partner Lead',
-          email: 'ep@example.co.uk',
-          qualifications: ['head_ref', 'judge_advisor'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-eplead01@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-      ),
-    ];
+    await _backend.signOut();
   }
 }

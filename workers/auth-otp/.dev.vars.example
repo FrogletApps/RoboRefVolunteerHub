@@ -1,0 +1,6 @@
+# Copy to `.dev.vars` for local `wrangler dev` testing (NEVER commit `.dev.vars`!)
+INVITE_CODES="UKVEX-2026,VEX-REF-UK"
+OTP_HMAC_SECRET="replace-with-32-byte-random-hex-secret"
+# Cloudflare Turnstile official dummy test secret key for local development:
+TURNSTILE_SECRET_KEY="1x0000000000000000000000000000000AA"
+FIREBASE_SERVICE_ACCOUNT_JSON='{"project_id":"your-firebase-project","client_email":"firebase-adminsdk@your-firebase-project.iam.gserviceaccount.com","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"}'

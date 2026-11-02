@@ -1,84 +1,196 @@
+import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../../profile/models/volunteer_model.dart';
 import '../services/auth_service.dart';
+import '../services/otp_auth_api_client.dart';
 
-final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
-  throw UnimplementedError('SharedPreferences must be overridden in main()');
+enum AuthGateStatus {
+  loading,
+  unauthenticated,
+  needsOnboarding,
+  authenticated,
+}
+
+@immutable
+class AuthGateState {
+  final AuthGateStatus status;
+  final AuthSession? session;
+  final VolunteerModel? volunteer;
+
+  const AuthGateState({
+    required this.status,
+    this.session,
+    this.volunteer,
+  });
+
+  const AuthGateState.loading()
+      : status = AuthGateStatus.loading,
+        session = null,
+        volunteer = null;
+
+  const AuthGateState.unauthenticated()
+      : status = AuthGateStatus.unauthenticated,
+        session = null,
+        volunteer = null;
+
+  const AuthGateState.needsOnboarding(AuthSession this.session)
+      : status = AuthGateStatus.needsOnboarding,
+        volunteer = null;
+
+  const AuthGateState.authenticated({
+    required AuthSession this.session,
+    required VolunteerModel this.volunteer,
+  }) : status = AuthGateStatus.authenticated;
+}
+
+final otpAuthApiClientProvider = Provider<OtpAuthApiClient>((ref) {
+  return OtpAuthApiClient();
+});
+
+final authBackendProvider = Provider<AuthBackend>((ref) {
+  return FirebaseAuthBackend();
 });
 
 final authServiceProvider = Provider<AuthService>((ref) {
-  final prefs = ref.watch(sharedPreferencesProvider);
-  return AuthService(prefs);
+  final apiClient = ref.watch(otpAuthApiClientProvider);
+  final backend = ref.watch(authBackendProvider);
+  return AuthService(apiClient: apiClient, backend: backend);
 });
 
-class CurrentVolunteerNotifier extends StateNotifier<VolunteerModel?> {
+class AuthController extends StateNotifier<AuthGateState> {
   final AuthService _authService;
+  StreamSubscription<AuthSession?>? _subscription;
+  int _sessionGeneration = 0;
 
-  CurrentVolunteerNotifier(this._authService) : super(_authService.getCurrentVolunteer());
-
-  Future<VolunteerModel> login({
-    required String email,
-    required String password,
-  }) async {
-    final volunteer = await _authService.login(
-      email: email,
-      password: password,
-    );
-    state = volunteer;
-    return volunteer;
+  AuthController(this._authService) : super(const AuthGateState.loading()) {
+    _init();
   }
 
-  Future<VolunteerModel> signup({
-    required String inviteCode,
-    required String name,
+  void _init() {
+    _subscription = _authService.authSessionChanges().listen(
+      _handleSessionChanged,
+      onError: (_) {
+        state = const AuthGateState.unauthenticated();
+      },
+    );
+  }
+
+  Future<void> _handleSessionChanged(AuthSession? session) async {
+    final generation = ++_sessionGeneration;
+    if (session == null) {
+      state = const AuthGateState.unauthenticated();
+      return;
+    }
+
+    try {
+      final profile = await _authService.fetchCurrentVolunteerProfile(session);
+      if (!mounted || generation != _sessionGeneration) return;
+
+      if (profile == null) {
+        state = AuthGateState.needsOnboarding(session);
+      } else {
+        state = AuthGateState.authenticated(
+          session: session,
+          volunteer: profile.withDisabledPrivacyAndEpSettings(),
+        );
+      }
+    } catch (_) {
+      if (!mounted || generation != _sessionGeneration) return;
+      state = AuthGateState.needsOnboarding(session);
+    }
+  }
+
+  Future<OtpRequestResult> requestSignInOtp({
     required String email,
-    required String password,
-    String? phone,
-    List<String> qualifications = const [],
-    bool isEmailPublic = false,
-    bool isPhonePublic = false,
-    bool forwardingEnabled = false,
-  }) async {
-    final volunteer = await _authService.signup(
-      inviteCode: inviteCode,
-      name: name,
+    String? turnstileToken,
+  }) {
+    return _authService.requestSignInOtp(
       email: email,
-      password: password,
+      turnstileToken: turnstileToken,
+    );
+  }
+
+  Future<OtpRequestResult> requestInviteOtp({
+    required String email,
+    required String inviteCode,
+    String? turnstileToken,
+  }) {
+    return _authService.requestInviteOtp(
+      email: email,
+      inviteCode: inviteCode,
+      turnstileToken: turnstileToken,
+    );
+  }
+
+  Future<void> verifyOtpAndSignIn({
+    required String email,
+    required String code,
+  }) async {
+    final session = await _authService.verifyOtpAndSignIn(
+      email: email,
+      code: code,
+    );
+    await _handleSessionChanged(session);
+  }
+
+  Future<VolunteerModel> completeOnboarding({
+    required String name,
+    String? phone,
+    required List<String> qualifications,
+  }) async {
+    final session = state.session ?? _authService.currentSession;
+    if (session == null) {
+      throw const AuthApiException(
+        code: 'unauthenticated',
+        message: 'Please verify your email before completing registration.',
+      );
+    }
+
+    final saved = await _authService.completeOnboarding(
+      session: session,
+      name: name,
       phone: phone,
       qualifications: qualifications,
-      isEmailPublic: isEmailPublic,
-      isPhonePublic: isPhonePublic,
-      forwardingEnabled: forwardingEnabled,
     );
-    state = volunteer;
-    return volunteer;
+    state = AuthGateState.authenticated(session: session, volunteer: saved);
+    return saved;
   }
 
   Future<void> updateProfile(VolunteerModel updated) async {
-    final sanitized = updated.withDisabledPrivacyAndEpSettings();
-    await _authService.updateProfile(sanitized);
-    state = sanitized;
+    final saved = await _authService.updateProfile(updated);
+    final session = state.session ?? _authService.currentSession;
+    if (session != null) {
+      state = AuthGateState.authenticated(session: session, volunteer: saved);
+    }
   }
 
   Future<void> logout() async {
+    ++_sessionGeneration;
     await _authService.logout();
-    state = null;
+    state = const AuthGateState.unauthenticated();
   }
 
-  void refresh() {
-    state = _authService.getCurrentVolunteer();
+  @override
+  void dispose() {
+    _subscription?.cancel();
+    super.dispose();
   }
 }
 
-final currentVolunteerProvider =
-    StateNotifierProvider<CurrentVolunteerNotifier, VolunteerModel?>((ref) {
+final authControllerProvider =
+    StateNotifierProvider<AuthController, AuthGateState>((ref) {
   final authService = ref.watch(authServiceProvider);
-  return CurrentVolunteerNotifier(authService);
+  return AuthController(authService);
 });
 
-/// Toggle to test Event Partner actions (verification lock-in)
-final isEpModeProvider = StateProvider<bool>((ref) {
-  final volunteer = ref.watch(currentVolunteerProvider);
-  return volunteer?.isEventPartner ?? false;
+/// Reactive read-only view of the currently signed-in volunteer profile (or null).
+final currentVolunteerProvider = Provider<VolunteerModel?>((ref) {
+  final gate = ref.watch(authControllerProvider);
+  return gate.volunteer;
+});
+
+/// Locked off (`false`) in v1 since all users are volunteers.
+final isEpModeProvider = Provider<bool>((ref) {
+  return false;
 });

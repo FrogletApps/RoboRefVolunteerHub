@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
 import '../../../core/constants/roles.dart';
 
@@ -48,7 +49,9 @@ class VolunteerModel {
   /// Generate a clean email forwarding alias from volunteer ID
   static String generateForwardingAddress(String id) {
     final cleanId = id.replaceAll(RegExp(r'[^a-zA-Z0-9]'), '').toLowerCase();
-    final prefix = cleanId.length >= 8 ? cleanId.substring(0, 8) : cleanId.padRight(8, '0');
+    final prefix = cleanId.length >= 8
+        ? cleanId.substring(0, 8)
+        : cleanId.padRight(8, '0');
     return 'vol-$prefix@volunteer.roboref.app';
   }
 
@@ -85,6 +88,67 @@ class VolunteerModel {
       forwardingAddress: forwardingAddress ?? this.forwardingAddress,
       isEventPartner: isEventPartner ?? this.isEventPartner,
       certifications: certifications ?? this.certifications,
+    );
+  }
+
+  /// Roster-visible Firestore document (`volunteers/{uid}`) — strictly zero PII.
+  /// Matches `isValidVolunteerProfile(uid)` in `firestore.rules`.
+  Map<String, dynamic> toPublicFirestoreMap({Object? updatedAtTimestamp}) {
+    return {
+      'id': id,
+      'name': name.trim(),
+      'qualifications': qualifications,
+      'forwardingAddress': forwardingAddress,
+      'isEmailPublic': false,
+      'isPhonePublic': false,
+      'forwardingEnabled': false,
+      'isEventPartner': false,
+      if (certifications != null) 'certifications': certifications,
+      'updatedAt': updatedAtTimestamp ?? FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// Strictly owner-only Firestore document (`volunteer_private/{uid}`).
+  /// Matches `isValidVolunteerPrivate()` in `firestore.rules`.
+  Map<String, dynamic> toPrivateFirestoreMap({Object? updatedAtTimestamp}) {
+    final cleanPhone = phone?.trim();
+    return {
+      'email': email.trim().toLowerCase(),
+      'phone': (cleanPhone != null && cleanPhone.isNotEmpty) ? cleanPhone : null,
+      'updatedAt': updatedAtTimestamp ?? FieldValue.serverTimestamp(),
+    };
+  }
+
+  /// Reconstructs a `VolunteerModel` from `volunteers/{uid}` and optional
+  /// owner-only `volunteer_private/{uid}` data.
+  factory VolunteerModel.fromFirestoreMaps({
+    required String uid,
+    required Map<String, dynamic> publicData,
+    Map<String, dynamic>? privateData,
+    String fallbackEmail = '',
+  }) {
+    final resolvedEmail =
+        (privateData?['email'] as String?)?.trim() ?? fallbackEmail;
+    final resolvedPhone = privateData?['phone'] as String?;
+
+    return VolunteerModel(
+      id: uid,
+      name: publicData['name'] as String? ?? '',
+      email: resolvedEmail,
+      phone: (resolvedPhone != null && resolvedPhone.trim().isNotEmpty)
+          ? resolvedPhone.trim()
+          : null,
+      qualifications: (publicData['qualifications'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      isEmailPublic: false,
+      isPhonePublic: false,
+      forwardingEnabled: false,
+      forwardingAddress: publicData['forwardingAddress'] as String? ??
+          generateForwardingAddress(uid),
+      isEventPartner: false,
+      certifications: publicData['certifications'] as String?,
     );
   }
 

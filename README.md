@@ -6,33 +6,24 @@
 
 **RoboRef Volunteer Hub** is an unofficial volunteer management and event coordination application built specifically for VEX Robotics competitions (**V5RC**, **VIQRC**, and **VEX U**), initially focused on the **United Kingdom**.
 
-It allows certified volunteers to register via invite codes, declare their certified qualifications, control contact privacy (public phone/email vs. anonymized email forwarding address), and mark themselves as **Available** or **Confirmed** for UK events fetched directly from the official **VEX Events API** (`events.vex.com`).
+It allows invited volunteers to authenticate via passwordless **6-digit Email OTP**, declare their certified qualifications, keep personal contact details strictly isolated from public rosters, and mark themselves as **Available** or **Confirmed** for UK events fetched directly from the official **VEX Events API** (`events.vex.com`).
 
 ---
 
 ## ✨ Key Features
 
-- 🎟️ **Invite-Only Access**:
-  - Gated volunteer registration verifying against a static administrator invite code list (e.g. `UKVEX-2026`, `VEX-REF-UK`, `ROBO-VOL-2026`, `UK-EP-VERIFIED`).
-  - Protects event rosters from spam while maintaining an extensible architecture for future user-issued invites.
+- 🔐 **Passwordless 6-Digit Email OTP & Persistent Device Sessions**:
+  - Invite-only new volunteer onboarding verified server-side against encrypted Cloudflare Secrets (`INVITE_CODES`).
+  - Native **Cloudflare Email Service** (`send_email`) delivery protected by 4-layer rate limiting (60s cooldown, **12 emails/day per user**, per-IP cap, Cloudflare Turnstile, and a global daily circuit breaker).
+  - Persistent device sessions via **Firebase Authentication** (`Persistence.LOCAL` on Web, Keychain on iOS, Keystore on Android) so volunteers stay signed in across weeks/months until explicit logout.
+- 🛡️ **Zero-PII Roster Architecture**:
+  - Personal contact details (`email`, `phone`) are isolated in owner-only `volunteer_private/{uid}` documents in **Cloud Firestore** (`firestore.rules`) and are never exposed on `volunteers/{uid}` or `event_signups` documents.
 - 🏅 **Qualification Management**:
   - Track official volunteer roles: **Head Referee**, **Field Referee**, **Judge Advisor**, **Judge**, and **Other** (Field Queuer, TM Operator, Robot Inspection, Emcee).
-  - Profile management for certifications and role preferences.
-- 🛡️ **Privacy & Email Forwarding Relay**:
-  - Volunteers choose between making contact details public (phone or email) or utilizing an anonymized forwarding relay address (`vol-<hash>@volunteer.roboref.app`).
-  - Organizers and colleagues can contact volunteers without exposing private phone numbers or personal email inboxes.
 - 📅 **Per-Event Availability & Confirmation Tracking**:
-  - Volunteers can mark themselves as **Available** (interested/free) or **Confirmed** (committed attendance).
-  - **Dynamic Qualified Role Selector**: When signing up for an event, users select potential roles drawn directly from their qualified roles, with the ability to specify custom unlisted roles.
-  - **Volunteer Withdrawal**: Volunteers can pull out / withdraw from an event at any time with an instant update to the live roster.
-- 🔒 **Event Partner (EP) Verification Checkmark**:
-  - Event Partners can formally verify and lock in volunteer role assignments with a prominent **EP Verified** badge.
+  - Volunteers can mark themselves as **Available** or **Confirmed**, pick qualified roles, or withdraw at any time with live updates.
 - 🌐 **UK VEX Events Integration**:
-  - Queries upcoming UK tournaments from the official **VEX Events API** (`events.vex.com/api/v2/events`) with caching and fallback resiliency.
-  - Search by tournament name, venue, city, or SKU (`RE-V5RC-...`, `RE-VIQRC-...`).
-  - Direct **"View on VEX Events"** action button launching `events.vex.com`.
-- 📊 **Real-Time Coverage KPI & Roster View**:
-  - Breakdown of confirmed vs available volunteers, role fulfillment counts (e.g. Head Ref 1/1, Ref 4/4, Judge 3/6), and segmented filtering.
+  - Queries upcoming UK tournaments from the official **VEX Events API** (`events.vex.com/api/v2/events`) with search by name, venue, city, or SKU (`RE-V5RC-...`, `RE-VIQRC-...`).
 
 ---
 
@@ -40,59 +31,41 @@ It allows certified volunteers to register via invite codes, declare their certi
 
 | Component | Technology | Description |
 | :--- | :--- | :--- |
-| **Framework** | **Flutter** (Dart ^3.5.0) | Cross-platform client for Web, Android, and iOS |
-| **State Management** | **Riverpod** 2.x | Reactive state and dependency injection |
-| **Local Storage** | **SharedPreferences** & **Drift** | Offline session and volunteer signups persistence |
-| **UI Design** | **Material Design 3** | RoboRef brand green theme with accessible contrast |
+| **Client Framework** | **Flutter** (Dart ^3.5.0) | Cross-platform client for Web, Android, and iOS |
+| **State Management** | **Riverpod** 2.x | Reactive auth gating, state, and dependency injection |
+| **Identity & Sessions** | **Firebase Authentication** | Custom-token sign-in with long-lived remembered device sessions |
+| **Database & Rules** | **Cloud Firestore** | Real-time rosters & strict `firestore.rules` PII isolation |
+| **Auth Edge Worker** | **Cloudflare Workers + KV + Email Service** | Standalone `workers/auth-otp/` invite validator, rate limiter & 6-digit OTP sender |
 | **External API** | **VEX Events API v2** | `events.vex.com` event data and schedule ingestion |
-
----
-
-## 🔑 Administrator Invite Codes
-
-The initial release validates against the following static invite codes:
-
-| Code | Role / Privileges |
-| :--- | :--- |
-| `UKVEX-2026` | Standard UK Volunteer Access |
-| `VEX-REF-UK` | Referee & Official Access |
-| `ROBO-VOL-2026` | General Volunteer Access |
-| `UK-EP-VERIFIED` | Event Partner (EP) Access with Verification & Lock-In Privileges |
-| `FROGLET-INVITE-26` | Partner Invite Code |
 
 ---
 
 ## 🚀 Getting Started
 
-### Prerequisites
-- [Flutter SDK](https://docs.flutter.dev/get-started/install) (`^3.5.0` or higher) with Dart `^3.5.0`
-
-### 1. Clone & Install Dependencies
+### 1. Cloudflare Auth OTP Worker (`workers/auth-otp/`)
+See [workers/auth-otp/README.md](workers/auth-otp/README.md) to configure the `AUTH_OTP_KV` namespace, onboard `roboref.app` in Cloudflare Email Service, set `INVITE_CODES` / `OTP_HMAC_SECRET` / `FIREBASE_SERVICE_ACCOUNT_JSON` / `TURNSTILE_SECRET_KEY` secrets, and deploy:
 ```bash
-cd app
-flutter pub get
+cd workers/auth-otp
+npm test
+npx wrangler deploy
 ```
 
-### 2. Run the Application
-#### Run on Web (Chrome):
-```bash
-flutter run -d chrome
-```
-
-#### Run on Mobile Emulator or Device:
-```bash
-flutter run
-```
-
-### 3. Run Automated Tests
-```bash
-flutter test
-```
-
-### 4. Run Code Analysis
-```bash
-flutter analyze
-```
+### 2. Firebase & Flutter Application (`app/`)
+1. Provision a Firebase project (London `europe-west2` Firestore region), deploy `firestore.rules`:
+   ```bash
+   npx -y firebase-tools@latest deploy --only firestore:rules
+   ```
+2. Configure FlutterFire inside `app/`:
+   ```bash
+   cd app
+   flutterfire configure
+   flutter pub get
+   ```
+3. Run tests and code analysis:
+   ```bash
+   flutter analyze
+   flutter test
+   ```
 
 ---
 
@@ -100,31 +73,21 @@ flutter analyze
 
 ```text
 RoboRefVolunteerHub/
-├── app/
+├── app/                                    # Flutter Web / Android / iOS application
 │   ├── lib/
-│   │   ├── core/
-│   │   │   ├── constants/
-│   │   │   │   └── roles.dart              # Role definitions, colors, admin invite codes
-│   │   │   ├── theme/
-│   │   │   │   └── app_theme.dart          # RoboRef Material 3 theme & badge colors
-│   │   │   └── utils/
-│   │   │       ├── sku_utils.dart          # SKU validation & program resolution (from RoboRef)
-│   │   │       ├── event_regions.dart      # UK regions & international taxonomy (from RoboRef)
-│   │   │       └── url_utils.dart          # VEX Events external link, mailto & tel launcher
+│   │   ├── firebase_options.dart           # Firebase platform config (--dart-define or flutterfire)
 │   │   ├── features/
-│   │   │   ├── auth_invites/               # Invite code gate, volunteer registration, auth state
-│   │   │   ├── profile/                    # Qualifications & privacy settings (forwarding vs public)
+│   │   │   ├── auth_invites/               # Passwordless 6-digit OTP login, onboarding & Firebase Auth state
+│   │   │   ├── profile/                    # Qualifications & PII-isolated profile model
 │   │   │   ├── events/                     # UK VEX Events search, filter, VEX Events API client
-│   │   │   └── volunteering/               # Event signup, dynamic role picker, roster & EP verification
-│   │   └── main.dart                       # Entry point with invite-gated routing
-│   ├── test/
-│   │   ├── invite_auth_test.dart           # Invite code validation & auth session tests
-│   │   ├── models_test.dart                # Volunteer, signup & event model tests
-│   │   ├── roster_test.dart                # Event signup, withdrawal & EP verification tests
-│   │   ├── sku_utils_test.dart             # SKU regex & URL launcher tests
-│   │   └── widget_test.dart                # App smoke & InviteGateScreen widget tests
-│   └── pubspec.yaml
-└── README.md
+│   │   │   └── volunteering/               # Firestore event signups & roster screen
+│   │   └── main.dart                       # Persistent session initialization & reactive auth router
+│   └── test/                               # Unit & widget test suites
+├── workers/
+│   └── auth-otp/                           # Standalone Cloudflare Worker (OTP + Invite Gate + Rate Limiter)
+├── firestore.rules                         # Hardened Cloud Firestore Security Rules
+├── firestore.indexes.json                  # Firestore index definitions
+└── firebase.json                           # Firebase Hosting & Firestore configuration
 ```
 
 ---

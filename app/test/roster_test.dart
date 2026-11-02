@@ -1,36 +1,42 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/services/auth_service.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/services/otp_auth_api_client.dart';
 import 'package:roboref_volunteer_hub/features/auth_invites/state/auth_provider.dart';
 import 'package:roboref_volunteer_hub/features/events/models/event_model.dart';
 import 'package:roboref_volunteer_hub/features/profile/models/volunteer_model.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/models/signup_model.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/screens/event_roster_screen.dart';
 import 'package:roboref_volunteer_hub/features/volunteering/services/volunteer_repository.dart';
+import 'package:roboref_volunteer_hub/features/volunteering/state/volunteering_provider.dart';
 
 void main() {
   group('Volunteer Repository & Roster Tests', () {
+    late InMemorySignupStore store;
     late VolunteerRepository repo;
 
-    final testVolunteer = VolunteerModel(
+    const testVolunteer = VolunteerModel(
       id: 'vol-test-1',
       name: 'Sam Ref',
       email: 'sam@example.com',
+      phone: '+44 7700 900111',
       qualifications: ['head_ref', 'ref'],
       forwardingAddress: 'vol-test1@volunteer.roboref.app',
     );
 
-    setUp(() async {
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
-      repo = VolunteerRepository(prefs);
+    setUp(() {
+      store = InMemorySignupStore();
+      repo = VolunteerRepository(store);
     });
 
-    test('Volunteer can sign up as Available and then Confirmed', () async {
+    test(
+        'Volunteer can sign up as Available then Confirmed with composite ID and zero embedded PII',
+        () async {
       const sku = 'RE-V5RC-26-9102';
 
-      // 1. Mark as Available
       final signupAvailable = await repo.saveSignup(
         sku: sku,
         volunteer: testVolunteer,
@@ -39,14 +45,17 @@ void main() {
         notes: 'Can referee all day',
       );
 
+      expect(signupAvailable.id, equals('RE-V5RC-26-9102_vol-test-1'));
       expect(signupAvailable.status, equals(SignupStatus.available));
       expect(signupAvailable.epVerified, isFalse);
 
-      final userSignup = await repo.getUserSignupForEvent(sku: sku, volunteerId: testVolunteer.id);
-      expect(userSignup, isNotNull);
-      expect(userSignup!.status, equals(SignupStatus.available));
+      // Ensure raw stored Firestore map contains NO embedded volunteer PII
+      final rawDoc = store.getRawDoc('RE-V5RC-26-9102_vol-test-1')!;
+      expect(rawDoc.containsKey('volunteer'), isFalse);
+      expect(rawDoc.containsKey('email'), isFalse);
+      expect(rawDoc.containsKey('phone'), isFalse);
 
-      // 2. Update to Confirmed
+      // Update to Confirmed
       final signupConfirmed = await repo.saveSignup(
         sku: sku,
         volunteer: testVolunteer,
@@ -55,34 +64,23 @@ void main() {
       );
 
       expect(signupConfirmed.status, equals(SignupStatus.confirmed));
-
-      final updatedUserSignup = await repo.getUserSignupForEvent(sku: sku, volunteerId: testVolunteer.id);
+      final updatedUserSignup = await repo.getUserSignupForEvent(
+        sku: sku,
+        volunteerId: testVolunteer.id,
+      );
       expect(updatedUserSignup!.status, equals(SignupStatus.confirmed));
     });
 
-    test('Event Partner can toggle EP Verified checkmark lock-in', () async {
-      const sku = 'RE-V5RC-26-9102';
-
-      final signup = await repo.saveSignup(
-        sku: sku,
-        volunteer: testVolunteer,
-        status: SignupStatus.confirmed,
-        offeredRoles: ['head_ref'],
+    test('EP verification toggle is locked disabled in v1 volunteer-only mode',
+        () async {
+      await expectLater(
+        () => repo.toggleEpVerification(signupId: 'RE-V5RC-26-9102_vol-test-1'),
+        throwsUnsupportedError,
       );
-
-      expect(signup.epVerified, isFalse);
-
-      // EP verifies / locks in
-      final verifiedSignup = await repo.toggleEpVerification(signupId: signup.id);
-      expect(verifiedSignup, isNotNull);
-      expect(verifiedSignup!.epVerified, isTrue);
-
-      // EP un-verifies
-      final unlockedSignup = await repo.toggleEpVerification(signupId: signup.id);
-      expect(unlockedSignup!.epVerified, isFalse);
     });
 
-    test('Volunteer can pull out / withdraw from an event at any time', () async {
+    test('Volunteer can pull out / withdraw from an event at any time',
+        () async {
       const sku = 'RE-V5RC-26-9102';
 
       await repo.saveSignup(
@@ -92,26 +90,31 @@ void main() {
         offeredRoles: ['ref'],
       );
 
-      var userSignup = await repo.getUserSignupForEvent(sku: sku, volunteerId: testVolunteer.id);
+      var userSignup = await repo.getUserSignupForEvent(
+        sku: sku,
+        volunteerId: testVolunteer.id,
+      );
       expect(userSignup, isNotNull);
 
-      // Pull out / withdraw
-      final withdrawn = await repo.withdrawSignup(sku: sku, volunteerId: testVolunteer.id);
+      final withdrawn = await repo.withdrawSignup(
+        sku: sku,
+        volunteerId: testVolunteer.id,
+      );
       expect(withdrawn, isTrue);
 
-      userSignup = await repo.getUserSignupForEvent(sku: sku, volunteerId: testVolunteer.id);
+      userSignup = await repo.getUserSignupForEvent(
+        sku: sku,
+        volunteerId: testVolunteer.id,
+      );
       expect(userSignup, isNull);
     });
 
     testWidgets(
-        'Volunteer Roster hides all contact details (phone, email, and relay) for all users',
+        'Volunteer Roster displays real signups and hides all contact details',
         (WidgetTester tester) async {
       tester.view.physicalSize = const Size(1000, 1600);
       tester.view.devicePixelRatio = 1.0;
       addTearDown(tester.view.resetPhysicalSize);
-
-      SharedPreferences.setMockInitialValues({});
-      final prefs = await SharedPreferences.getInstance();
 
       const event = EventModel(
         id: 1,
@@ -127,10 +130,49 @@ void main() {
         country: 'United Kingdom',
       );
 
+      final seededStore = InMemorySignupStore(
+        initialSignups: [
+          EventSignupModel(
+            id: 'RE-V5RC-26-9102_vol-alex',
+            sku: 'RE-V5RC-26-9102',
+            volunteerId: 'vol-alex',
+            volunteerName: 'Alex Turner',
+            status: SignupStatus.confirmed,
+            offeredRoles: const ['head_ref'],
+            updatedAt: DateTime(2026, 11, 1),
+          ),
+          EventSignupModel(
+            id: 'RE-V5RC-26-9102_vol-sarah',
+            sku: 'RE-V5RC-26-9102',
+            volunteerId: 'vol-sarah',
+            volunteerName: 'Sarah Jenkins',
+            status: SignupStatus.available,
+            offeredRoles: const ['judge_advisor'],
+            updatedAt: DateTime(2026, 11, 2),
+          ),
+        ],
+      );
+
+      final authBackend = InMemoryAuthBackend(
+        initialSession: const AuthSession(
+          uid: 'vol-test-1',
+          email: 'sam@example.com',
+        ),
+        initialProfile: testVolunteer,
+      );
+      addTearDown(authBackend.dispose);
+
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
-            sharedPreferencesProvider.overrideWithValue(prefs),
+            authBackendProvider.overrideWithValue(authBackend),
+            otpAuthApiClientProvider.overrideWithValue(
+              OtpAuthApiClient(
+                httpClient:
+                    MockClient((_) async => http.Response('Unused', 500)),
+              ),
+            ),
+            signupStoreProvider.overrideWithValue(seededStore),
           ],
           child: const MaterialApp(
             home: EventRosterScreen(event: event),
@@ -139,15 +181,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // Volunteer names are visible on the roster
       expect(find.text('Alex Turner'), findsOneWidget);
       expect(find.text('Sarah Jenkins'), findsOneWidget);
-      expect(find.text('Emma Watson'), findsOneWidget);
 
-      // No phone numbers, email addresses, relay buttons, or Private Contact labels are shown
-      expect(find.text('+44 7700 900123'), findsNothing);
-      expect(find.text('alex.turner@example.org'), findsNothing);
-      expect(find.text('emma.w@example.com'), findsNothing);
+      expect(find.text('+44 7700 900111'), findsNothing);
+      expect(find.text('sam@example.com'), findsNothing);
       expect(find.text('Email via Relay'), findsNothing);
       expect(find.text('Private Contact'), findsNothing);
       expect(find.byIcon(Icons.phone), findsNothing);

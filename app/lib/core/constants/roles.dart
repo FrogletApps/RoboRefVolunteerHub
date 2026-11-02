@@ -37,12 +37,3 @@ enum VolunteerRole {
     }
   }
 }
-
-/// Static administrator invite codes for initial release
-const List<String> kAdminInviteCodes = [
-  'UKVEX-2026',
-  'VEX-REF-UK',
-  'ROBO-VOL-2026',
-  'UK-EP-VERIFIED',
-  'FROGLET-INVITE-26',
-];

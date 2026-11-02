@@ -1,97 +1,203 @@
-import 'dart:convert';
-import 'package:flutter/foundation.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/signup_model.dart';
 import '../../profile/models/volunteer_model.dart';
 
+/// Storage abstraction for volunteer event signups (`event_signups/{sku}_{uid}`).
+abstract class SignupStore {
+  Future<List<EventSignupModel>> getSignupsForEvent(String cleanSku);
+
+  Future<EventSignupModel?> getUserSignupForEvent({
+    required String cleanSku,
+    required String volunteerId,
+  });
+
+  Future<List<EventSignupModel>> getSignupsForVolunteer(String volunteerId);
+
+  Future<EventSignupModel> upsertSignup(EventSignupModel signup);
+
+  Future<bool> deleteSignup({
+    required String cleanSku,
+    required String volunteerId,
+  });
+}
+
+/// Production Firestore store backed by `event_signups/{sku}_{uid}`.
+/// Never stores volunteer PII (`email`, `phone`) on signup documents.
+class FirestoreSignupStore implements SignupStore {
+  final FirebaseFirestore _firestore;
+
+  FirestoreSignupStore({FirebaseFirestore? firestore})
+      : _firestore = firestore ?? FirebaseFirestore.instance;
+
+  CollectionReference<Map<String, dynamic>> get _signupsRef =>
+      _firestore.collection('event_signups');
+
+  @override
+  Future<List<EventSignupModel>> getSignupsForEvent(String cleanSku) async {
+    final snap = await _signupsRef.where('sku', isEqualTo: cleanSku).get();
+    final items = snap.docs
+        .map((doc) => EventSignupModel.fromFirestoreMap(doc.id, doc.data()))
+        .toList();
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  @override
+  Future<EventSignupModel?> getUserSignupForEvent({
+    required String cleanSku,
+    required String volunteerId,
+  }) async {
+    final docId = EventSignupModel.buildCompositeId(cleanSku, volunteerId);
+    final doc = await _signupsRef.doc(docId).get();
+    if (!doc.exists || doc.data() == null) return null;
+    return EventSignupModel.fromFirestoreMap(doc.id, doc.data()!);
+  }
+
+  @override
+  Future<List<EventSignupModel>> getSignupsForVolunteer(
+    String volunteerId,
+  ) async {
+    final snap =
+        await _signupsRef.where('volunteerId', isEqualTo: volunteerId).get();
+    final items = snap.docs
+        .map((doc) => EventSignupModel.fromFirestoreMap(doc.id, doc.data()))
+        .toList();
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  @override
+  Future<EventSignupModel> upsertSignup(EventSignupModel signup) async {
+    final docId =
+        EventSignupModel.buildCompositeId(signup.sku, signup.volunteerId);
+    final normalized = signup.copyWith(
+      id: docId,
+      sku: signup.sku.trim().toUpperCase(),
+      epVerified: false,
+      volunteer: null,
+    );
+    await _signupsRef.doc(docId).set(normalized.toFirestoreMap());
+    return normalized;
+  }
+
+  @override
+  Future<bool> deleteSignup({
+    required String cleanSku,
+    required String volunteerId,
+  }) async {
+    final docId = EventSignupModel.buildCompositeId(cleanSku, volunteerId);
+    final docRef = _signupsRef.doc(docId);
+    final existing = await docRef.get();
+    if (!existing.exists) return false;
+    await docRef.delete();
+    return true;
+  }
+}
+
+/// Deterministic in-memory store for fast unit and widget tests (no demo seed data).
+class InMemorySignupStore implements SignupStore {
+  final Map<String, Map<String, dynamic>> _docs = {};
+
+  InMemorySignupStore({List<EventSignupModel> initialSignups = const []}) {
+    for (final s in initialSignups) {
+      final docId = EventSignupModel.buildCompositeId(s.sku, s.volunteerId);
+      _docs[docId] =
+          s.copyWith(id: docId, epVerified: false).toFirestoreMap(
+                updatedAtTimestamp: s.updatedAt.toIso8601String(),
+              );
+    }
+  }
+
+  Map<String, dynamic>? getRawDoc(String docId) => _docs[docId];
+
+  @override
+  Future<List<EventSignupModel>> getSignupsForEvent(String cleanSku) async {
+    final items = _docs.entries
+        .where((e) => e.value['sku'] == cleanSku)
+        .map((e) => EventSignupModel.fromFirestoreMap(e.key, e.value))
+        .toList();
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  @override
+  Future<EventSignupModel?> getUserSignupForEvent({
+    required String cleanSku,
+    required String volunteerId,
+  }) async {
+    final docId = EventSignupModel.buildCompositeId(cleanSku, volunteerId);
+    final raw = _docs[docId];
+    if (raw == null) return null;
+    return EventSignupModel.fromFirestoreMap(docId, raw);
+  }
+
+  @override
+  Future<List<EventSignupModel>> getSignupsForVolunteer(
+    String volunteerId,
+  ) async {
+    final items = _docs.entries
+        .where((e) => e.value['volunteerId'] == volunteerId)
+        .map((e) => EventSignupModel.fromFirestoreMap(e.key, e.value))
+        .toList();
+    items.sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
+    return items;
+  }
+
+  @override
+  Future<EventSignupModel> upsertSignup(EventSignupModel signup) async {
+    final docId =
+        EventSignupModel.buildCompositeId(signup.sku, signup.volunteerId);
+    final normalized = signup.copyWith(
+      id: docId,
+      sku: signup.sku.trim().toUpperCase(),
+      epVerified: false,
+      volunteer: null,
+    );
+    _docs[docId] = normalized.toFirestoreMap(
+      updatedAtTimestamp: normalized.updatedAt.toIso8601String(),
+    );
+    return normalized;
+  }
+
+  @override
+  Future<bool> deleteSignup({
+    required String cleanSku,
+    required String volunteerId,
+  }) async {
+    final docId = EventSignupModel.buildCompositeId(cleanSku, volunteerId);
+    return _docs.remove(docId) != null;
+  }
+}
+
 class VolunteerRepository {
-  final SharedPreferences _prefs;
-  static const String _storageKey = 'event_volunteer_signups_v1';
+  final SignupStore _store;
 
-  VolunteerRepository(this._prefs) {
-    _loadAllSignups();
-  }
-
-  static bool _hasEnabledPrivacyOrEpInJson(Map<String, dynamic>? map) {
-    if (map == null) return false;
-    return map['isEmailPublic'] == true ||
-        map['isPhonePublic'] == true ||
-        map['forwardingEnabled'] == true ||
-        map['isEventPartner'] == true;
-  }
-
-  /// Load all saved signups from local storage, ensuring any volunteer privacy/EP
-  /// toggles on persisted signups are turned off.
-  List<EventSignupModel> _loadAllSignups() {
-    final raw = _prefs.getString(_storageKey);
-    if (raw == null || raw.isEmpty) {
-      return _getPreseededDemoSignups();
-    }
-    try {
-      final list = jsonDecode(raw) as List<dynamic>;
-      var changed = false;
-      final signups = list.map((e) {
-        final signupMap = e as Map<String, dynamic>;
-        final volunteerMap = signupMap['volunteer'] as Map<String, dynamic>?;
-        final signup = EventSignupModel.fromJson(signupMap);
-        if (signup.volunteer != null) {
-          final sanitizedVol =
-              signup.volunteer!.withDisabledPrivacyAndEpSettings();
-          if (_hasEnabledPrivacyOrEpInJson(volunteerMap) ||
-              !identical(signup.volunteer, sanitizedVol)) {
-            changed = true;
-            return signup.copyWith(volunteer: sanitizedVol);
-          }
-        }
-        return signup;
-      }).toList();
-      if (changed) {
-        _saveAllSignups(signups);
-      }
-      return signups;
-    } catch (e) {
-      debugPrint('Error decoding signups: $e');
-      return _getPreseededDemoSignups();
-    }
-  }
-
-  /// Save all signups to local storage
-  Future<void> _saveAllSignups(List<EventSignupModel> signups) async {
-    final raw = jsonEncode(signups.map((s) => s.toJson()).toList());
-    await _prefs.setString(_storageKey, raw);
-  }
+  VolunteerRepository(this._store);
 
   /// Get signups for a specific event SKU
-  Future<List<EventSignupModel>> getSignupsForEvent(String sku) async {
+  Future<List<EventSignupModel>> getSignupsForEvent(String sku) {
     final cleanSku = sku.trim().toUpperCase();
-    final all = _loadAllSignups();
-    return all.where((s) => s.sku.toUpperCase() == cleanSku).toList();
+    return _store.getSignupsForEvent(cleanSku);
   }
 
   /// Get current user's signup for an event (if any)
   Future<EventSignupModel?> getUserSignupForEvent({
     required String sku,
     required String volunteerId,
-  }) async {
+  }) {
     final cleanSku = sku.trim().toUpperCase();
-    final all = _loadAllSignups();
-    try {
-      return all.firstWhere(
-        (s) => s.sku.toUpperCase() == cleanSku && s.volunteerId == volunteerId,
-      );
-    } catch (_) {
-      return null;
-    }
+    return _store.getUserSignupForEvent(
+      cleanSku: cleanSku,
+      volunteerId: volunteerId,
+    );
   }
 
   /// Get all event signups for a specific volunteer
-  Future<List<EventSignupModel>> getSignupsForVolunteer(String volunteerId) async {
-    final all = _loadAllSignups();
-    return all.where((s) => s.volunteerId == volunteerId).toList();
+  Future<List<EventSignupModel>> getSignupsForVolunteer(String volunteerId) {
+    return _store.getSignupsForVolunteer(volunteerId);
   }
 
-  /// Save or update a volunteer signup (Available or Confirmed)
+  /// Save or update a volunteer signup (Available or Confirmed) without embedding PII
   Future<EventSignupModel> saveSignup({
     required String sku,
     required VolunteerModel volunteer,
@@ -99,217 +205,41 @@ class VolunteerRepository {
     required List<String> offeredRoles,
     String? otherRoleDescription,
     String? notes,
-  }) async {
+  }) {
     final cleanSku = sku.trim().toUpperCase();
-    final all = _loadAllSignups();
-
-    final existingIndex = all.indexWhere(
-      (s) => s.sku.toUpperCase() == cleanSku && s.volunteerId == volunteer.id,
-    );
+    final docId = EventSignupModel.buildCompositeId(cleanSku, volunteer.id);
 
     final signup = EventSignupModel(
-      id: existingIndex >= 0 ? all[existingIndex].id : const Uuid().v4(),
+      id: docId,
       sku: cleanSku,
       volunteerId: volunteer.id,
-      volunteerName: volunteer.name,
+      volunteerName: volunteer.name.trim(),
       status: status,
-      epVerified: existingIndex >= 0 ? all[existingIndex].epVerified : false,
+      epVerified: false,
       offeredRoles: offeredRoles,
       otherRoleDescription: otherRoleDescription,
       notes: notes,
-      volunteer: volunteer.withDisabledPrivacyAndEpSettings(),
       updatedAt: DateTime.now(),
     );
 
-    if (existingIndex >= 0) {
-      all[existingIndex] = signup;
-    } else {
-      all.add(signup);
-    }
-
-    await _saveAllSignups(all);
-    return signup;
+    return _store.upsertSignup(signup);
   }
 
   /// Volunteer withdraws / pulls out of an event
   Future<bool> withdrawSignup({
     required String sku,
     required String volunteerId,
-  }) async {
+  }) {
     final cleanSku = sku.trim().toUpperCase();
-    final all = _loadAllSignups();
-    final initialCount = all.length;
-
-    all.removeWhere(
-      (s) => s.sku.toUpperCase() == cleanSku && s.volunteerId == volunteerId,
-    );
-
-    if (all.length != initialCount) {
-      await _saveAllSignups(all);
-      return true;
-    }
-    return false;
+    return _store.deleteSignup(cleanSku: cleanSku, volunteerId: volunteerId);
   }
 
-  /// Event Partner toggles the "EP Verified" checkmark lock-in
+  /// Disabled in v1 while all users are volunteers (`epVerified` locked to `false` in Firestore rules).
   Future<EventSignupModel?> toggleEpVerification({
     required String signupId,
   }) async {
-    final all = _loadAllSignups();
-    final index = all.indexWhere((s) => s.id == signupId);
-    if (index >= 0) {
-      final updated = all[index].copyWith(
-        epVerified: !all[index].epVerified,
-        updatedAt: DateTime.now(),
-      );
-      all[index] = updated;
-      await _saveAllSignups(all);
-      return updated;
-    }
-    return null;
-  }
-
-  /// Realistic pre-seeded demo signups for UK events showing diverse roles & privacy modes
-  List<EventSignupModel> _getPreseededDemoSignups() {
-    return [
-      // National Championship: RE-V5RC-26-9102
-      EventSignupModel(
-        id: 'demo-signup-1',
-        sku: 'RE-V5RC-26-9102',
-        volunteerId: 'vol-alex-turner',
-        volunteerName: 'Alex Turner',
-        status: SignupStatus.confirmed,
-        epVerified: true, // EP Locked in
-        offeredRoles: ['head_ref'],
-        notes: 'Certified Head Ref 2026-2027. Bringing referee whistle and scoring tablet.',
-        volunteer: const VolunteerModel(
-          id: 'vol-alex-turner',
-          name: 'Alex Turner',
-          email: 'alex.turner@example.org',
-          phone: '+44 7700 900123',
-          qualifications: ['head_ref', 'ref'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-alex102@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(days: 2)),
-      ),
-      EventSignupModel(
-        id: 'demo-signup-2',
-        sku: 'RE-V5RC-26-9102',
-        volunteerId: 'vol-sarah-jenkins',
-        volunteerName: 'Sarah Jenkins',
-        status: SignupStatus.confirmed,
-        epVerified: true,
-        offeredRoles: ['judge_advisor'],
-        notes: 'Experienced Judge Advisor for UK Midlands and South.',
-        volunteer: const VolunteerModel(
-          id: 'vol-sarah-jenkins',
-          name: 'Sarah Jenkins',
-          email: 'sarah.j@example.co.uk',
-          qualifications: ['judge_advisor', 'judge'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-sarah91@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(days: 3)),
-      ),
-      EventSignupModel(
-        id: 'demo-signup-3',
-        sku: 'RE-V5RC-26-9102',
-        volunteerId: 'vol-david-clarke',
-        volunteerName: 'David Clarke',
-        status: SignupStatus.available,
-        epVerified: false,
-        offeredRoles: ['ref', 'judge'],
-        notes: 'Free from 8:30am to 4pm. Can referee or review engineering notebooks.',
-        volunteer: const VolunteerModel(
-          id: 'vol-david-clarke',
-          name: 'David Clarke',
-          email: 'david.c@example.org',
-          qualifications: ['ref', 'judge'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-david44@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(days: 1)),
-      ),
-      EventSignupModel(
-        id: 'demo-signup-4',
-        sku: 'RE-V5RC-26-9102',
-        volunteerId: 'vol-emma-watson',
-        volunteerName: 'Emma Watson',
-        status: SignupStatus.available,
-        epVerified: false,
-        offeredRoles: ['other'],
-        otherRoleDescription: 'Tournament Manager Operator',
-        notes: 'Experience running TM display & field control raspberry pis.',
-        volunteer: const VolunteerModel(
-          id: 'vol-emma-watson',
-          name: 'Emma Watson',
-          email: 'emma.w@example.com',
-          phone: '+44 7700 900555',
-          qualifications: ['other'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-emma88@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(hours: 12)),
-      ),
-
-      // London South VIQRC: RE-VIQRC-26-8821
-      EventSignupModel(
-        id: 'demo-signup-5',
-        sku: 'RE-VIQRC-26-8821',
-        volunteerId: 'vol-oliver-brown',
-        volunteerName: 'Oliver Brown',
-        status: SignupStatus.confirmed,
-        epVerified: true,
-        offeredRoles: ['head_ref'],
-        volunteer: const VolunteerModel(
-          id: 'vol-oliver-brown',
-          name: 'Oliver Brown',
-          email: 'oliver.b@example.co.uk',
-          qualifications: ['head_ref', 'ref'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-oliver3@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(days: 4)),
-      ),
-      EventSignupModel(
-        id: 'demo-signup-6',
-        sku: 'RE-VIQRC-26-8821',
-        volunteerId: 'vol-hannah-smith',
-        volunteerName: 'Hannah Smith',
-        status: SignupStatus.available,
-        epVerified: false,
-        offeredRoles: ['ref', 'other'],
-        otherRoleDescription: 'Field Queuing',
-        volunteer: const VolunteerModel(
-          id: 'vol-hannah-smith',
-          name: 'Hannah Smith',
-          email: 'hannah.s@example.org',
-          phone: '+44 7700 900999',
-          qualifications: ['ref', 'other'],
-          isEmailPublic: false,
-          isPhonePublic: false,
-          forwardingEnabled: false,
-          forwardingAddress: 'vol-hannah7@volunteer.roboref.app',
-          isEventPartner: false,
-        ),
-        updatedAt: DateTime.now().subtract(const Duration(days: 1)),
-      ),
-    ];
+    throw UnsupportedError(
+      'Event Partner verification is disabled in v1 while all accounts are volunteer-scoped.',
+    );
   }
 }

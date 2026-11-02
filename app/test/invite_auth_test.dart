@@ -1,300 +1,256 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:roboref_volunteer_hub/core/utils/crypto_utils.dart';
-import 'package:roboref_volunteer_hub/core/utils/auth_payload.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
 import 'package:roboref_volunteer_hub/features/auth_invites/services/auth_service.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/services/otp_auth_api_client.dart';
+import 'package:roboref_volunteer_hub/features/auth_invites/state/auth_provider.dart';
+import 'package:roboref_volunteer_hub/features/profile/models/volunteer_model.dart';
 
 void main() {
-  group('Invite Code & Auth Tests', () {
-    late AuthService authService;
-    late SharedPreferences prefs;
+  group('Passwordless 6-Digit Email OTP & Invite Gate Auth Tests', () {
+    late InMemoryAuthBackend backend;
+    late Map<String, String> issuedOtps;
+    late Set<String> validInviteCodes;
+    late int requestCountForEmail;
 
-    setUp(() async {
-      SharedPreferences.setMockInitialValues({});
-      prefs = await SharedPreferences.getInstance();
-      authService = AuthService(prefs);
-    });
+    AuthService buildAuthService({int maxDailyPerUser = 12}) {
+      final mockClient = MockClient((request) async {
+        final body = jsonDecode(request.body) as Map<String, dynamic>;
 
-    test('Validates static administrator invite codes', () {
-      expect(authService.validateInviteCode('UKVEX-2026'), isTrue);
-      expect(authService.validateInviteCode('ukvex-2026'), isTrue); // Case-insensitive
-      expect(authService.validateInviteCode('VEX-REF-UK'), isTrue);
-      expect(authService.validateInviteCode('UK-EP-VERIFIED'), isTrue);
-      expect(authService.validateInviteCode('INVALID-CODE'), isFalse);
-      expect(authService.validateInviteCode(''), isFalse);
-    });
+        if (request.url.path == '/api/auth/request-otp') {
+          final mode = body['mode'] as String;
+          final email = (body['email'] as String).trim().toLowerCase();
 
-    test('Successful signup stores volunteer profile with privacy & EP toggles off and hashed password', () async {
-      final volunteer = await authService.signup(
-        inviteCode: 'UKVEX-2026',
-        name: 'Jane Doe',
-        email: 'jane@example.co.uk',
-        password: 'Password123!',
-        phone: '+44 7700 900888',
-        qualifications: ['head_ref', 'ref', 'judge_advisor'],
-      );
+          if (mode == 'join') {
+            final code = (body['inviteCode'] as String? ?? '').toUpperCase();
+            if (!validInviteCodes.contains(code)) {
+              return http.Response(
+                jsonEncode({
+                  'ok': false,
+                  'error': 'invalid_invite_code',
+                  'message':
+                      'Invalid invitation code. Access to RoboRef Volunteer Hub is invite-only.',
+                }),
+                403,
+              );
+            }
+          }
 
-      expect(volunteer.name, equals('Jane Doe'));
-      expect(volunteer.qualifications, contains('head_ref'));
-      expect(volunteer.forwardingAddress, startsWith('vol-'));
-      expect(volunteer.isEmailPublic, isFalse);
-      expect(volunteer.isPhonePublic, isFalse);
-      expect(volunteer.forwardingEnabled, isFalse);
-      expect(volunteer.isEventPartner, isFalse);
+          requestCountForEmail += 1;
+          if (requestCountForEmail > maxDailyPerUser) {
+            return http.Response(
+              jsonEncode({
+                'ok': false,
+                'error': 'rate_limit_user_daily',
+                'message':
+                    'You have reached the daily limit of $maxDailyPerUser verification emails. Please try again tomorrow.',
+                'retryAfterSeconds': 3600,
+              }),
+              429,
+            );
+          }
 
-      final current = authService.getCurrentVolunteer();
-      expect(current, isNotNull);
-      expect(current!.email, equals('jane@example.co.uk'));
-      expect(current.isEmailPublic, isFalse);
-      expect(current.isPhonePublic, isFalse);
-      expect(current.forwardingEnabled, isFalse);
-      expect(current.isEventPartner, isFalse);
+          issuedOtps[email] = '482910';
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'cooldownSeconds': 60,
+              'message': 'Check your email for a 6-digit verification code.',
+            }),
+            200,
+          );
+        }
 
-      // Verify password is NOT stored in plain text anywhere
-      final storedAccountsRaw = prefs.getString('registered_volunteer_accounts_v1');
-      expect(storedAccountsRaw, isNotNull);
-      expect(storedAccountsRaw!.contains('Password123!'), isFalse);
-      expect(storedAccountsRaw.contains('pbkdf2_sha256\$10000\$'), isTrue);
-    });
+        if (request.url.path == '/api/auth/verify-otp') {
+          final email = (body['email'] as String).trim().toLowerCase();
+          final submitted = body['code'] as String;
+          final expected = issuedOtps[email];
+          if (expected == null || expected != submitted) {
+            return http.Response(
+              jsonEncode({
+                'ok': false,
+                'error': 'invalid_or_expired_code',
+                'message': 'Invalid or expired verification code.',
+              }),
+              401,
+            );
+          }
+          issuedOtps.remove(email); // Single-use OTP
+          final uid = 'uid-${email.split('@').first}';
+          return http.Response(
+            jsonEncode({
+              'ok': true,
+              'uid': uid,
+              'email': email,
+              'customToken': 'test-token:$uid:$email',
+            }),
+            200,
+          );
+        }
 
-    test('Signup with UK-EP-VERIFIED keeps all privacy & EP settings off by default', () async {
-      final volunteer = await authService.signup(
-        inviteCode: 'UK-EP-VERIFIED',
-        name: 'Test EP Lead',
-        email: 'ep-test@example.co.uk',
-        password: 'SecurePassword123!',
-        qualifications: ['head_ref', 'judge_advisor'],
-      );
-
-      expect(volunteer.isEmailPublic, isFalse);
-      expect(volunteer.isPhonePublic, isFalse);
-      expect(volunteer.forwardingEnabled, isFalse);
-      expect(volunteer.isEventPartner, isFalse);
-    });
-
-    test('Signup with invalid invite code throws exception', () async {
-      expect(
-        () => authService.signup(
-          inviteCode: 'BAD-CODE-999',
-          name: 'Hacker',
-          email: 'bad@example.com',
-          password: 'Password123!',
-        ),
-        throwsException,
-      );
-    });
-
-    test('Signup with weak password (< 8 chars) throws exception', () async {
-      expect(
-        () => authService.signup(
-          inviteCode: 'UKVEX-2026',
-          name: 'Short PW User',
-          email: 'short@example.com',
-          password: '123',
-        ),
-        throwsException,
-      );
-    });
-
-    test('Signup with duplicate email throws exception', () async {
-      await authService.signup(
-        inviteCode: 'UKVEX-2026',
-        name: 'User One',
-        email: 'duplicate@example.com',
-        password: 'Password123!',
-      );
-
-      expect(
-        () => authService.signup(
-          inviteCode: 'UKVEX-2026',
-          name: 'User Two',
-          email: 'duplicate@example.com',
-          password: 'Password123!',
-        ),
-        throwsException,
-      );
-    });
-
-    test('Login with valid email and password succeeds and sets session', () async {
-      await authService.signup(
-        inviteCode: 'UKVEX-2026',
-        name: 'Bob Smith',
-        email: 'bob.smith@example.co.uk',
-        password: 'MySecretPassword123!',
-      );
-
-      // Clear session to simulate fresh login
-      await authService.logout();
-      expect(authService.getCurrentVolunteer(), isNull);
-
-      // Perform login
-      final loggedIn = await authService.login(
-        email: 'bob.smith@example.co.uk',
-        password: 'MySecretPassword123!',
-      );
-
-      expect(loggedIn.email, equals('bob.smith@example.co.uk'));
-      expect(loggedIn.name, equals('Bob Smith'));
-      expect(authService.getCurrentVolunteer(), isNotNull);
-    });
-
-    test('Login is case-insensitive for email', () async {
-      await authService.signup(
-        inviteCode: 'UKVEX-2026',
-        name: 'Case Test',
-        email: 'case@example.com',
-        password: 'Password123!',
-      );
-
-      final loggedIn = await authService.login(
-        email: 'CASE@EXAMPLE.COM',
-        password: 'Password123!',
-      );
-      expect(loggedIn.email, equals('case@example.com'));
-    });
-
-    test('Login with incorrect password throws exception', () async {
-      await authService.signup(
-        inviteCode: 'UKVEX-2026',
-        name: 'Auth Target',
-        email: 'target@example.com',
-        password: 'RealPassword123!',
-      );
-
-      expect(
-        () => authService.login(
-          email: 'target@example.com',
-          password: 'WrongPassword!',
-        ),
-        throwsException,
-      );
-    });
-
-    test('Login with non-existent email throws exception', () async {
-      expect(
-        () => authService.login(
-          email: 'ghost@example.com',
-          password: 'Password123!',
-        ),
-        throwsException,
-      );
-    });
-
-    test('Preseeded demo accounts can log in out of the box with all privacy & EP toggles off', () async {
-      for (final email in [
-        'alex.turner@example.org',
-        'sarah.j@example.co.uk',
-        'ep@example.co.uk',
-      ]) {
-        final user = await authService.login(
-          email: email,
-          password: 'Password123!',
-        );
-        expect(user.isEmailPublic, isFalse);
-        expect(user.isPhonePublic, isFalse);
-        expect(user.forwardingEnabled, isFalse);
-        expect(user.isEventPartner, isFalse);
-      }
-    });
-
-    test('Previously persisted users with turned-on privacy/EP settings are reset to off', () async {
-      final legacyHash = CryptoUtils.hashPassword('Password123!');
-      SharedPreferences.setMockInitialValues({
-        'current_volunteer_profile': jsonEncode({
-          'id': 'vol-legacy-1',
-          'name': 'Legacy User',
-          'email': 'legacy@example.org',
-          'qualifications': ['ref'],
-          'isEmailPublic': true,
-          'isPhonePublic': true,
-          'forwardingEnabled': true,
-          'forwardingAddress': 'vol-legacy01@volunteer.roboref.app',
-          'isEventPartner': true,
-        }),
-        'registered_volunteer_accounts_v1': jsonEncode([
-          {
-            'email': 'legacy@example.org',
-            'passwordHash': legacyHash,
-            'createdAt': '2026-09-01T00:00:00.000Z',
-            'profile': {
-              'id': 'vol-legacy-1',
-              'name': 'Legacy User',
-              'email': 'legacy@example.org',
-              'qualifications': ['ref'],
-              'isEmailPublic': true,
-              'isPhonePublic': true,
-              'forwardingEnabled': true,
-              'forwardingAddress': 'vol-legacy01@volunteer.roboref.app',
-              'isEventPartner': true,
-            },
-          },
-        ]),
+        return http.Response('Not Found', 404);
       });
 
-      final legacyPrefs = await SharedPreferences.getInstance();
-      final service = AuthService(legacyPrefs);
-
-      final active = service.getCurrentVolunteer()!;
-      expect(active.isEmailPublic, isFalse);
-      expect(active.isPhonePublic, isFalse);
-      expect(active.forwardingEnabled, isFalse);
-      expect(active.isEventPartner, isFalse);
-
-      final loggedIn = await service.login(
-        email: 'legacy@example.org',
-        password: 'Password123!',
+      return AuthService(
+        apiClient: OtpAuthApiClient(
+          httpClient: mockClient,
+          baseUrl: 'https://roboref.app',
+        ),
+        backend: backend,
       );
-      expect(loggedIn.isEmailPublic, isFalse);
-      expect(loggedIn.isPhonePublic, isFalse);
-      expect(loggedIn.forwardingEnabled, isFalse);
-      expect(loggedIn.isEventPartner, isFalse);
-    });
-  });
+    }
 
-  group('Crypto & Secure Transmission Tests', () {
-    test('CryptoUtils hashes with PBKDF2-HMAC-SHA256 and verifies correctly', () {
-      const password = 'SuperSecretPassword2026!';
-      final hash = CryptoUtils.hashPassword(password);
-
-      expect(hash, startsWith('pbkdf2_sha256\$10000\$'));
-      expect(CryptoUtils.verifyPassword(password, hash), isTrue);
-      expect(CryptoUtils.verifyPassword('WrongPassword!', hash), isFalse);
+    setUp(() {
+      backend = InMemoryAuthBackend();
+      issuedOtps = {};
+      validInviteCodes = {'UKVEX-2026', 'VEX-REF-UK'};
+      requestCountForEmail = 0;
     });
 
-    test('CryptoUtils generates unique salts', () {
-      final salt1 = CryptoUtils.generateSalt();
-      final salt2 = CryptoUtils.generateSalt();
-      expect(salt1, isNot(equals(salt2)));
-      expect(salt1.length, equals(32)); // 16 bytes in hex = 32 chars
+    tearDown(() {
+      backend.dispose();
     });
 
-    test('CryptoUtils fixedTimeEquals prevents timing discrepancies', () {
-      expect(CryptoUtils.fixedTimeEquals('abc', 'abc'), isTrue);
-      expect(CryptoUtils.fixedTimeEquals('abc', 'abd'), isFalse);
-      expect(CryptoUtils.fixedTimeEquals('abc', 'abcd'), isFalse);
+    test('Rejects invalid invite codes on server before sending OTP', () async {
+      final authService = buildAuthService();
+
+      await expectLater(
+        () => authService.requestInviteOtp(
+          email: 'newref@example.co.uk',
+          inviteCode: 'WRONG-CODE',
+        ),
+        throwsA(
+          isA<AuthApiException>().having(
+            (e) => e.code,
+            'code',
+            'invalid_invite_code',
+          ),
+        ),
+      );
+      expect(issuedOtps, isEmpty);
     });
 
-    test('AuthCredentials asserts HTTPS transmission security', () {
+    test(
+        'Completes invite + 6-digit OTP + onboarding and strictly isolates PII from public Firestore doc',
+        () async {
+      final authService = buildAuthService();
+
+      await authService.requestInviteOtp(
+        email: 'Jane.Doe@example.co.uk',
+        inviteCode: 'ukvex-2026',
+      );
+
+      final session = await authService.verifyOtpAndSignIn(
+        email: 'Jane.Doe@example.co.uk',
+        code: '482910',
+      );
+      expect(session.email, equals('jane.doe@example.co.uk'));
+      expect(authService.currentSession, equals(session));
+
+      final profile = await authService.completeOnboarding(
+        session: session,
+        name: 'Jane Doe',
+        phone: '+44 7700 900888',
+        qualifications: ['head_ref', 'ref'],
+      );
+
+      expect(profile.name, equals('Jane Doe'));
+      expect(profile.email, equals('jane.doe@example.co.uk'));
+      expect(profile.phone, equals('+44 7700 900888'));
+      expect(profile.isEmailPublic, isFalse);
+      expect(profile.isPhonePublic, isFalse);
+      expect(profile.forwardingEnabled, isFalse);
+      expect(profile.isEventPartner, isFalse);
+
+      // Verify public Firestore payload contains ZERO PII (`email`, `phone`)
+      final publicDoc = backend.getStoredPublicDoc(session.uid)!;
+      expect(publicDoc.containsKey('email'), isFalse);
+      expect(publicDoc.containsKey('phone'), isFalse);
+      expect(publicDoc['isEmailPublic'], isFalse);
+      expect(publicDoc['isPhonePublic'], isFalse);
+      expect(publicDoc['forwardingEnabled'], isFalse);
+      expect(publicDoc['isEventPartner'], isFalse);
+
+      // Verify private owner-only Firestore payload holds email & phone
+      final privateDoc = backend.getStoredPrivateDoc(session.uid)!;
+      expect(privateDoc['email'], equals('jane.doe@example.co.uk'));
+      expect(privateDoc['phone'], equals('+44 7700 900888'));
+    });
+
+    test('Surfaces 12/day per-person rate limit error from Worker', () async {
+      final authService = buildAuthService(maxDailyPerUser: 12);
+
+      for (var i = 0; i < 12; i++) {
+        await authService.requestSignInOtp(email: 'alex@example.org');
+      }
+
+      await expectLater(
+        () => authService.requestSignInOtp(email: 'alex@example.org'),
+        throwsA(
+          isA<AuthApiException>()
+              .having((e) => e.code, 'code', 'rate_limit_user_daily')
+              .having((e) => e.message, 'message', contains('12')),
+        ),
+      );
+    });
+
+    test(
+        'Remembered device session automatically authenticates without re-entering OTP',
+        () async {
+      const rememberedSession = AuthSession(
+        uid: 'uid-remembered',
+        email: 'sam@example.co.uk',
+      );
+      const rememberedProfile = VolunteerModel(
+        id: 'uid-remembered',
+        name: 'Sam Referee',
+        email: 'sam@example.co.uk',
+        qualifications: ['head_ref'],
+        forwardingAddress: 'vol-uidremem@volunteer.roboref.app',
+      );
+
+      final persistedBackend = InMemoryAuthBackend(
+        initialSession: rememberedSession,
+        initialProfile: rememberedProfile,
+      );
+      addTearDown(persistedBackend.dispose);
+
+      final service = AuthService(
+        apiClient: OtpAuthApiClient(
+          httpClient: MockClient((_) async => http.Response('Unused', 500)),
+        ),
+        backend: persistedBackend,
+      );
+      final controller = AuthController(service);
+      addTearDown(controller.dispose);
+
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+
+      expect(controller.state.status, equals(AuthGateStatus.authenticated));
+      expect(controller.state.volunteer?.name, equals('Sam Referee'));
+
+      // Explicit logout clears remembered session
+      await controller.logout();
+      expect(controller.state.status, equals(AuthGateStatus.unauthenticated));
+      expect(persistedBackend.currentSession, isNull);
+    });
+
+    test('OtpAuthApiClient rejects cleartext non-localhost HTTP endpoints', () {
       expect(
-        () => AuthCredentials.assertSecureTransmission(
-          Uri.parse('http://insecure-api.roboref.app/auth'),
+        () => OtpAuthApiClient.assertSecureEndpoint(
+          Uri.parse('http://insecure-api.roboref.app/api/auth/request-otp'),
         ),
         throwsStateError,
       );
 
       expect(
-        () => AuthCredentials.assertSecureTransmission(
-          Uri.parse('https://secure-api.roboref.app/auth'),
+        () => OtpAuthApiClient.assertSecureEndpoint(
+          Uri.parse('https://roboref.app/api/auth/request-otp'),
         ),
         returnsNormally,
       );
-    });
-
-    test('AuthCredentials redacts password in toString', () {
-      const creds = AuthCredentials(email: 'test@example.com', password: 'Secret123!');
-      expect(creds.toString().contains('Secret123!'), isFalse);
-      expect(creds.toString(), contains('[REDACTED]'));
     });
   });
 }

@@ -1,0 +1,499 @@
+import { describe, it, beforeEach } from "node:test";
+import assert from "node:assert/strict";
+import { handleWorkerRequest } from "../src/index.ts";
+import { clearCachedGoogleOAuthTokenForTests } from "../src/firebaseAdmin.ts";
+import type { Env, KvStore, OutboundEmailPayload } from "../src/types.ts";
+
+class MemoryKv implements KvStore {
+  private store = new Map<string, { value: string; expiresAtMs?: number }>();
+  public nowMs: () => number;
+
+  constructor(nowMs: () => number) {
+    this.nowMs = nowMs;
+  }
+
+  async get(key: string): Promise<string | null> {
+    const item = this.store.get(key);
+    if (!item) return null;
+    if (item.expiresAtMs !== undefined && this.nowMs() >= item.expiresAtMs) {
+      this.store.delete(key);
+      return null;
+    }
+    return item.value;
+  }
+
+  async put(
+    key: string,
+    value: string,
+    options?: { expirationTtl?: number }
+  ): Promise<void> {
+    const expiresAtMs = options?.expirationTtl
+      ? this.nowMs() + options.expirationTtl * 1000
+      : undefined;
+    this.store.set(key, { value, expiresAtMs });
+  }
+
+  async delete(key: string): Promise<void> {
+    this.store.delete(key);
+  }
+}
+
+async function generateTestServiceAccountJson(): Promise<string> {
+  const keyPair = await crypto.subtle.generateKey(
+    {
+      name: "RSASSA-PKCS1-v1_5",
+      modulusLength: 2048,
+      publicExponent: new Uint8Array([1, 0, 1]),
+      hash: "SHA-256",
+    },
+    true,
+    ["sign", "verify"]
+  );
+  const pkcs8 = await crypto.subtle.exportKey("pkcs8", keyPair.privateKey);
+  const bytes = new Uint8Array(pkcs8);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  const b64 = btoa(binary);
+  const pem = `-----BEGIN PRIVATE KEY-----\n${b64}\n-----END PRIVATE KEY-----`;
+  return JSON.stringify({
+    project_id: "roboref-test",
+    client_email: "firebase-adminsdk@roboref-test.iam.gserviceaccount.com",
+    private_key: pem,
+  });
+}
+
+describe("RoboRef Auth OTP Cloudflare Worker", () => {
+  let currentTimeMs: number;
+  let kv: MemoryKv;
+  let sentEmails: OutboundEmailPayload[];
+  let registeredFirebaseUsers: Map<
+    string,
+    { uid: string; emailVerified: boolean; inviteVerified: boolean }
+  >;
+  let serviceAccountJson: string;
+
+  beforeEach(async () => {
+    clearCachedGoogleOAuthTokenForTests();
+    currentTimeMs = Date.parse("2026-11-02T09:00:00.000Z");
+    kv = new MemoryKv(() => currentTimeMs);
+    sentEmails = [];
+    registeredFirebaseUsers = new Map();
+    serviceAccountJson = await generateTestServiceAccountJson();
+  });
+
+  function createEnv(overrides: Partial<Env> = {}): Env {
+    return {
+      EMAIL: {
+        async send(msg: OutboundEmailPayload) {
+          sentEmails.push(msg);
+          return { messageId: `msg-${sentEmails.length}` };
+        },
+      },
+      AUTH_OTP_KV: kv,
+      INVITE_CODES: "UKVEX-2026, VEX-REF-UK",
+      OTP_HMAC_SECRET: "test-hmac-secret-32-bytes-minimum-key",
+      FIREBASE_SERVICE_ACCOUNT_JSON: serviceAccountJson,
+      TURNSTILE_SECRET_KEY: "turnstile-secret",
+      REQUIRE_TURNSTILE: "true",
+      SENDER_EMAIL: "noreply@roboref.app",
+      SENDER_NAME: "RoboRef Volunteer Hub",
+      MAX_DAILY_EMAILS_PER_USER: "12",
+      MAX_HOURLY_EMAILS_PER_IP: "100",
+      MAX_MINUTE_EMAILS_PER_IP: "20",
+      MAX_DAILY_EMAILS_GLOBAL: "150",
+      OTP_COOLDOWN_SECONDS: "60",
+      OTP_TTL_SECONDS: "600",
+      MAX_OTP_ATTEMPTS: "5",
+      ALLOWED_ORIGINS: "https://volunteer.roboref.app",
+      ...overrides,
+    };
+  }
+
+  function createMockFetch(): typeof fetch {
+    return (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+
+      if (url.includes("turnstile/v0/siteverify")) {
+        const params = new URLSearchParams(String(init?.body ?? ""));
+        const ok = params.get("response") === "valid-turnstile";
+        return new Response(JSON.stringify({ success: ok }), { status: 200 });
+      }
+
+      if (url === "https://oauth2.googleapis.com/token") {
+        return new Response(
+          JSON.stringify({ access_token: "mock-google-oauth", expires_in: 3600 }),
+          { status: 200 }
+        );
+      }
+
+      if (url.endsWith("/accounts:lookup")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { email: string[] };
+        const email = body.email[0];
+        const user = registeredFirebaseUsers.get(email);
+        if (!user) {
+          return new Response(JSON.stringify({}), { status: 200 });
+        }
+        return new Response(
+          JSON.stringify({
+            users: [
+              {
+                localId: user.uid,
+                email,
+                emailVerified: user.emailVerified,
+                customAttributes: JSON.stringify({
+                  inviteVerified: user.inviteVerified,
+                }),
+              },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (url.endsWith("/accounts")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { email: string };
+        const uid = `uid-${registeredFirebaseUsers.size + 1}`;
+        registeredFirebaseUsers.set(body.email, {
+          uid,
+          emailVerified: true,
+          inviteVerified: false,
+        });
+        return new Response(JSON.stringify({ localId: uid }), { status: 200 });
+      }
+
+      if (url.endsWith("/accounts:update")) {
+        const body = JSON.parse(String(init?.body ?? "{}")) as {
+          localId: string;
+          customAttributes: string;
+        };
+        for (const [email, u] of registeredFirebaseUsers.entries()) {
+          if (u.uid === body.localId) {
+            const attrs = JSON.parse(body.customAttributes) as {
+              inviteVerified?: boolean;
+            };
+            registeredFirebaseUsers.set(email, {
+              ...u,
+              emailVerified: true,
+              inviteVerified: Boolean(attrs.inviteVerified),
+            });
+          }
+        }
+        return new Response(JSON.stringify({ localId: body.localId }), {
+          status: 200,
+        });
+      }
+
+      return new Response("Unhandled mock URL: " + url, { status: 500 });
+    }) as typeof fetch;
+  }
+
+  function extractOtpFromLastEmail(): string {
+    const last = sentEmails[sentEmails.length - 1];
+    const match = last?.subject.match(/^(\d{6})\b/);
+    if (!match) throw new Error("No 6-digit OTP found in sent email");
+    return match[1];
+  }
+
+  it("blocks invalid invite codes BEFORE sending any email", async () => {
+    const env = createEnv();
+    const res = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.10",
+          Origin: "https://volunteer.roboref.app",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "new.ref@example.co.uk",
+          inviteCode: "WRONG-CODE",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      { fetchImpl: createMockFetch(), now: () => new Date(currentTimeMs) }
+    );
+
+    assert.equal(res.status, 403);
+    assert.equal(sentEmails.length, 0);
+  });
+
+  it("completes full invite + 6-digit OTP flow, mints custom token, and prevents OTP replay", async () => {
+    const env = createEnv();
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    const reqRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.11",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "Jane.Ref@example.co.uk",
+          inviteCode: "ukvex-2026",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      deps
+    );
+
+    assert.equal(reqRes.status, 200);
+    assert.equal(sentEmails.length, 1);
+    const otp = extractOtpFromLastEmail();
+
+    const verifyRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.11",
+        },
+        body: JSON.stringify({
+          email: "jane.ref@example.co.uk",
+          code: otp,
+        }),
+      }),
+      env,
+      deps
+    );
+
+    assert.equal(verifyRes.status, 200);
+    const data = (await verifyRes.json()) as {
+      ok: boolean;
+      uid: string;
+      customToken: string;
+    };
+    assert.equal(data.ok, true);
+    assert.equal(data.uid, "uid-1");
+    assert.equal(data.customToken.split(".").length, 3);
+
+    // Decode JWT payload to verify custom claims
+    const payloadJson = JSON.parse(
+      Buffer.from(data.customToken.split(".")[1], "base64url").toString("utf8")
+    ) as { uid: string; claims: { inviteVerified: boolean } };
+    assert.equal(payloadJson.uid, "uid-1");
+    assert.equal(payloadJson.claims.inviteVerified, true);
+
+    // Replay with the same OTP must fail (single-use)
+    const replayRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.11",
+        },
+        body: JSON.stringify({
+          email: "jane.ref@example.co.uk",
+          code: otp,
+        }),
+      }),
+      env,
+      deps
+    );
+    assert.equal(replayRes.status, 401);
+  });
+
+  it("does not send email or leak account existence for unregistered login emails", async () => {
+    const env = createEnv();
+    const res = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.12",
+        },
+        body: JSON.stringify({
+          mode: "login",
+          email: "stranger@example.com",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      { fetchImpl: createMockFetch(), now: () => new Date(currentTimeMs) }
+    );
+
+    assert.equal(res.status, 200);
+    assert.equal(sentEmails.length, 0);
+  });
+
+  it("enforces 60s cooldown and strict 12 emails/day per-person limit", async () => {
+    const env = createEnv();
+    registeredFirebaseUsers.set("alex@example.org", {
+      uid: "uid-alex",
+      emailVerified: true,
+      inviteVerified: true,
+    });
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    const sendRequest = (ipSuffix: number) =>
+      handleWorkerRequest(
+        new Request("https://roboref.app/api/auth/request-otp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "CF-Connecting-IP": `198.51.100.${ipSuffix}`,
+          },
+          body: JSON.stringify({
+            mode: "login",
+            email: "alex@example.org",
+            turnstileToken: "valid-turnstile",
+          }),
+        }),
+        env,
+        deps
+      );
+
+    // 1st request succeeds
+    const r1 = await sendRequest(1);
+    assert.equal(r1.status, 200);
+    assert.equal(sentEmails.length, 1);
+
+    // Immediate retry within 60s is blocked by cooldown
+    currentTimeMs += 15_000;
+    const rCooldown = await sendRequest(1);
+    assert.equal(rCooldown.status, 429);
+    const cooldownJson = (await rCooldown.json()) as { error: string };
+    assert.equal(cooldownJson.error, "rate_limit_email_cooldown");
+    assert.equal(sentEmails.length, 1);
+
+    // Advance >60s each time up to 12 total emails in the day
+    for (let i = 2; i <= 12; i++) {
+      currentTimeMs += 65_000;
+      const res = await sendRequest(i);
+      assert.equal(res.status, 200);
+      assert.equal(sentEmails.length, i);
+    }
+
+    // 13th email on the same UTC day is rejected by the 12/day per-user limit
+    currentTimeMs += 65_000;
+    const r13 = await sendRequest(13);
+    assert.equal(r13.status, 429);
+    const limitJson = (await r13.json()) as { error: string; message: string };
+    assert.equal(limitJson.error, "rate_limit_user_daily");
+    assert.match(limitJson.message, /12/);
+    assert.equal(sentEmails.length, 12);
+  });
+
+  it("enforces global daily circuit breaker before calling env.EMAIL.send()", async () => {
+    const env = createEnv({ MAX_DAILY_EMAILS_GLOBAL: "2" });
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    for (let i = 1; i <= 2; i++) {
+      const res = await handleWorkerRequest(
+        new Request("https://roboref.app/api/auth/request-otp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "CF-Connecting-IP": `203.0.113.${70 + i}`,
+          },
+          body: JSON.stringify({
+            mode: "join",
+            email: `vol${i}@example.org`,
+            inviteCode: "UKVEX-2026",
+            turnstileToken: "valid-turnstile",
+          }),
+        }),
+        env,
+        deps
+      );
+      assert.equal(res.status, 200);
+    }
+
+    const thirdRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.99",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "vol3@example.org",
+          inviteCode: "UKVEX-2026",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      deps
+    );
+    assert.equal(thirdRes.status, 429);
+    const errJson = (await thirdRes.json()) as { error: string };
+    assert.equal(errJson.error, "rate_limit_global_daily");
+    assert.equal(sentEmails.length, 2);
+  });
+
+  it("locks out and deletes OTP after 5 wrong verification guesses", async () => {
+    const env = createEnv();
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.50",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "sam@example.org",
+          inviteCode: "VEX-REF-UK",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      deps
+    );
+
+    const realOtp = extractOtpFromLastEmail();
+    const wrongOtp = realOtp === "000000" ? "999999" : "000000";
+
+    for (let attempt = 1; attempt <= 5; attempt++) {
+      const badRes = await handleWorkerRequest(
+        new Request("https://roboref.app/api/auth/verify-otp", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "CF-Connecting-IP": "203.0.113.50",
+          },
+          body: JSON.stringify({ email: "sam@example.org", code: wrongOtp }),
+        }),
+        env,
+        deps
+      );
+      assert.equal(badRes.status, 401);
+    }
+
+    // Even the real code on attempt #6 must fail because the OTP was purged
+    const sixthRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/verify-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.50",
+        },
+        body: JSON.stringify({ email: "sam@example.org", code: realOtp }),
+      }),
+      env,
+      deps
+    );
+    assert.equal(sixthRes.status, 401);
+  });
+});
