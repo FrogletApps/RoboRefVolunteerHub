@@ -95,7 +95,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
         return;
       }
       setState(() => _errorMessage = e.message);
-    } catch (_) {
+    } catch (e, stack) {
+      debugPrint('Google sign-in error: $e\n$stack');
       if (!mounted) return;
       setState(() {
         _errorMessage =
@@ -154,7 +155,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       if (e.retryAfterSeconds != null && e.retryAfterSeconds! > 0) {
         _startCooldown(e.retryAfterSeconds!);
       }
-    } catch (_) {
+    } catch (e, stack) {
+      debugPrint('Error requesting OTP: $e\n$stack');
       if (!mounted) return;
       setState(() {
         _errorMessage =
@@ -192,7 +194,8 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
     } on AuthApiException catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
-    } catch (_) {
+    } catch (e, stack) {
+      debugPrint('Error verifying OTP: $e\n$stack');
       if (!mounted) return;
       setState(() {
         _errorMessage = 'Unable to verify code right now. Please try again.';

@@ -36,6 +36,27 @@ export interface WorkerDeps {
   now?: () => Date;
 }
 
+export function isOriginAllowed(origin: string, allowedList: string[]): boolean {
+  if (allowedList.includes("*") || allowedList.includes(origin)) {
+    return true;
+  }
+  for (const allowed of allowedList) {
+    if (allowed.includes("*")) {
+      const regexPattern =
+        "^" +
+        allowed
+          .split("*")
+          .map((part) => part.replace(/[-[\]{}()+?.,\\^$|#\s]/g, "\\$&"))
+          .join(".*") +
+        "$";
+      if (new RegExp(regexPattern, "i").test(origin)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 function getCorsHeaders(request: Request, env: Env): Record<string, string> {
   const origin = request.headers.get("Origin");
   const allowedList = (env.ALLOWED_ORIGINS ?? "")
@@ -47,16 +68,21 @@ function getCorsHeaders(request: Request, env: Env): Record<string, string> {
     /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(o)
   );
   const isOriginLocalhost = Boolean(
-    origin && /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin)
+    origin &&
+      /^http:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+)(:\d+)?$/i.test(
+        origin
+      )
   );
 
-  const allowOrigin =
+  const isAllowed = Boolean(
     origin &&
-    (allowedList.includes(origin) ||
-      allowedList.includes("*") ||
-      (allowsLocalhost && isOriginLocalhost))
-      ? origin
-      : allowedList[0] ?? "https://volunteer.roboref.app";
+      (isOriginAllowed(origin, allowedList) ||
+        (allowsLocalhost && isOriginLocalhost))
+  );
+
+  const allowOrigin = isAllowed
+    ? origin!
+    : allowedList[0] ?? "https://volunteer.roboref.app";
 
   return {
     "Access-Control-Allow-Origin": allowOrigin,

@@ -653,4 +653,81 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
     );
     assert.equal(sentEmails.length, 0);
   });
+
+  it("allows wildcard origins (*.workers.dev, *.roboref.app) and local development IPs in CORS", async () => {
+    const corsEnv = createEnv({
+      ALLOWED_ORIGINS: "https://*.roboref.app,https://*.james-pearson.workers.dev,http://localhost:5000",
+    });
+    const deps = {
+      now: () => new Date(currentTimeMs),
+    };
+
+    // 1. Matching wildcard worker subdomain
+    const workerRes = await handleWorkerRequest(
+      new Request("https://roboref-volunteer-auth-otp.james-pearson.workers.dev/api/auth/request-otp", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://roboref-volunteer-hub.james-pearson.workers.dev",
+          "Access-Control-Request-Method": "POST",
+        },
+      }),
+      corsEnv,
+      deps
+    );
+    assert.equal(
+      workerRes.headers.get("Access-Control-Allow-Origin"),
+      "https://roboref-volunteer-hub.james-pearson.workers.dev"
+    );
+
+    // 2. Matching wildcard roboref subdomain
+    const appRes = await handleWorkerRequest(
+      new Request("https://roboref-volunteer-auth-otp.james-pearson.workers.dev/api/auth/request-otp", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://volunteer.roboref.app",
+          "Access-Control-Request-Method": "POST",
+        },
+      }),
+      corsEnv,
+      deps
+    );
+    assert.equal(
+      appRes.headers.get("Access-Control-Allow-Origin"),
+      "https://volunteer.roboref.app"
+    );
+
+    // 3. Local network dev server (e.g. 192.168.1.100:8080)
+    const lanRes = await handleWorkerRequest(
+      new Request("https://roboref-volunteer-auth-otp.james-pearson.workers.dev/api/auth/request-otp", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://192.168.1.100:8080",
+          "Access-Control-Request-Method": "POST",
+        },
+      }),
+      corsEnv,
+      deps
+    );
+    assert.equal(
+      lanRes.headers.get("Access-Control-Allow-Origin"),
+      "http://192.168.1.100:8080"
+    );
+
+    // 4. Unmatched third-party origin falls back to primary domain
+    const badRes = await handleWorkerRequest(
+      new Request("https://roboref-volunteer-auth-otp.james-pearson.workers.dev/api/auth/request-otp", {
+        method: "OPTIONS",
+        headers: {
+          Origin: "https://malicious-site.example.com",
+          "Access-Control-Request-Method": "POST",
+        },
+      }),
+      corsEnv,
+      deps
+    );
+    assert.equal(
+      badRes.headers.get("Access-Control-Allow-Origin"),
+      "https://*.roboref.app"
+    );
+  });
 });

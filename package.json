@@ -10,6 +10,7 @@
     "build:worker": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1 worker",
     "build:all": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1 all",
     "deploy": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+    "deploy:all": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 -DeployWorker",
     "deploy:dry-run": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 -DryRun",
     "deploy:worker": "npm --prefix workers/auth-otp run deploy",
     "deploy:firestore": "npx -y firebase-tools@latest deploy --only firestore",
