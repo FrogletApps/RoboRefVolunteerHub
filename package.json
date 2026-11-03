@@ -1,0 +1,23 @@
+{
+  "name": "roboref-volunteer-hub",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RoboRef Volunteer Hub - VEX Robotics volunteer management and event coordination",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.jsonc",
+    "dev:worker": "npm --prefix workers/auth-otp run dev",
+    "build": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1 web",
+    "build:worker": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1 worker",
+    "build:all": "powershell -ExecutionPolicy Bypass -File scripts/build.ps1 all",
+    "deploy": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1",
+    "deploy:dry-run": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 -DryRun",
+    "deploy:worker": "npm --prefix workers/auth-otp run deploy",
+    "deploy:firestore": "npx -y firebase-tools@latest deploy --only firestore",
+    "test:worker": "npm --prefix workers/auth-otp test",
+    "typecheck:worker": "npm --prefix workers/auth-otp run typecheck",
+    "typecheck": "npm --prefix workers/auth-otp run typecheck"
+  },
+  "devDependencies": {
+    "wrangler": "^4.157.0"
+  }
+}

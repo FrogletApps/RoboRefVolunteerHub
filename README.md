@@ -68,19 +68,51 @@ npx wrangler deploy
    flutter test
    ```
 
-### 3. Cloudflare Web Hosting (`wrangler.jsonc`)
-1. Build the Flutter Web bundle (supports `--wasm` for WebAssembly + CanvasKit fallback):
-   ```bash
-   cd app
-   flutter build web --wasm
-   ```
-2. From the repository root, preview locally or deploy static assets to Cloudflare:
-   ```bash
-   cd ..
-   npx wrangler deploy
-   ```
-3. Authorize your Cloudflare domain(s) (e.g. `volunteer.roboref.app` and `roboref-volunteer-hub.<subdomain>.workers.dev`) in **Firebase Console → Authentication → Settings → Authorized domains** so Google Sign-In popups work.
-4. To attach `volunteer.roboref.app`, uncomment `"routes"` in `wrangler.jsonc` and re-run `npx wrangler deploy` (or attach it under **Workers & Pages → Custom Domains** in the Cloudflare Dashboard).
+### 3. Build & Deploy Scripts (`scripts/` & `npm`)
+
+Just like the main RoboRef repository, automated date-based versioning (`YYYY.M.D`) and Git commit count build numbers are integrated into cross-platform build and deploy scripts:
+
+#### Fast Build (`scripts/build.ps1` or `scripts/build.sh`)
+```powershell
+# Build Flutter Web (with Wasm + CanvasKit fallback, versioned YYYY.M.D+commitCount)
+.\scripts\build.ps1 web
+
+# Verify & test the Auth OTP Worker
+.\scripts\build.ps1 worker
+
+# Build all targets (Worker verification + Web bundle)
+.\scripts\build.ps1 all
+```
+
+#### One-Command Deploy (`scripts/deploy.ps1` or `scripts/deploy.sh`)
+```powershell
+# Verify worker, compile web app, and deploy to Cloudflare
+.\scripts\deploy.ps1
+
+# Dry-run validation without publishing
+.\scripts\deploy.ps1 -DryRun
+
+# Deploy both web app and Auth OTP Cloudflare Worker
+.\scripts\deploy.ps1 -DeployWorker
+
+# Deploy web app, worker, and Firebase Firestore security rules
+.\scripts\deploy.ps1 -DeployWorker -DeployFirestore
+
+# Deploy using existing build artifacts (fast deploy)
+.\scripts\deploy.ps1 -SkipWebBuild
+```
+
+Or using root `npm` shortcuts:
+```bash
+npm run build          # Builds Flutter Web bundle
+npm run deploy         # Runs scripts/deploy.ps1
+npm run deploy:worker  # Deploys workers/auth-otp
+npm run test:worker    # Runs worker unit tests
+```
+
+#### Authorizing Domains in Firebase Auth
+Make sure to authorize your Cloudflare domain(s) (e.g. `volunteer.roboref.app` and `roboref-volunteer-hub.<subdomain>.workers.dev`) under **Firebase Console → Authentication → Settings → Authorized domains** so Google Sign-In popups work.
+To attach `volunteer.roboref.app`, uncomment `"routes"` in `wrangler.jsonc` and deploy.
 
 ---
 
@@ -103,11 +135,15 @@ RoboRefVolunteerHub/
 │   │   ├── index.html                      # Flutter Web entry shell
 │   │   └── manifest.json                   # PWA manifest
 │   └── test/                               # Unit & widget test suites
+├── scripts/                                # Build & deployment automation (PowerShell & Bash)
+│   ├── build.ps1 / build.sh                # Date-based versioning (YYYY.M.D+commitCount) & build pipeline
+│   └── deploy.ps1 / deploy.sh              # Cloudflare Workers static assets & worker deployment pipeline
 ├── workers/
 │   └── auth-otp/                           # Standalone Cloudflare Worker (OTP + Invite Gate + Rate Limiter)
 ├── firestore.rules                         # Hardened Cloud Firestore Security Rules
 ├── firestore.indexes.json                  # Firestore index definitions
 ├── firebase.json                           # Cloud Firestore rules & indexes configuration
+├── package.json                            # Root npm shortcuts for build, deploy, & worker tests
 └── wrangler.jsonc                          # Cloudflare Workers Static Assets SPA hosting configuration
 ```
 
