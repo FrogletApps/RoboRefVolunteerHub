@@ -4,23 +4,39 @@ import 'package:flutter/foundation.dart'
 
 /// Firebase configuration options for RoboRef Volunteer Hub.
 ///
-/// You can either:
-/// 1. Run `flutterfire configure` inside `app/` to overwrite this file with
-///    generated platform options, OR
-/// 2. Supply `--dart-define=FIREBASE_API_KEY=...`, `FIREBASE_PROJECT_ID=...`,
-///    `FIREBASE_APP_ID=...`, `FIREBASE_MESSAGING_SENDER_ID=...`, and
-///    `FIREBASE_AUTH_DOMAIN=...` at build time (`flutter build web`).
+/// Configured for the `volunteer-wrangler` Firebase project by default, while
+/// still allowing `--dart-define=FIREBASE_API_KEY=...`, `FIREBASE_PROJECT_ID=...`,
+/// `FIREBASE_APP_ID=...`, `FIREBASE_MESSAGING_SENDER_ID=...`, and
+/// `FIREBASE_AUTH_DOMAIN=...` overrides at build time (`flutter build web`).
 class DefaultFirebaseOptions {
-  static const String _apiKey = String.fromEnvironment('FIREBASE_API_KEY');
-  static const String _projectId =
-      String.fromEnvironment('FIREBASE_PROJECT_ID');
-  static const String _appId = String.fromEnvironment('FIREBASE_APP_ID');
-  static const String _messagingSenderId =
-      String.fromEnvironment('FIREBASE_MESSAGING_SENDER_ID');
-  static const String _authDomain =
-      String.fromEnvironment('FIREBASE_AUTH_DOMAIN');
-  static const String _storageBucket =
-      String.fromEnvironment('FIREBASE_STORAGE_BUCKET');
+  static const String _apiKey = String.fromEnvironment(
+    'FIREBASE_API_KEY',
+    defaultValue: 'AIzaSyCmpXK8jBBI33iZlomSqQlR7gsps8qhg_A',
+  );
+  static const String _projectId = String.fromEnvironment(
+    'FIREBASE_PROJECT_ID',
+    defaultValue: 'volunteer-wrangler',
+  );
+  static const String _appId = String.fromEnvironment(
+    'FIREBASE_APP_ID',
+    defaultValue: '1:279608062017:web:9bd435760200377b1596c0',
+  );
+  static const String _messagingSenderId = String.fromEnvironment(
+    'FIREBASE_MESSAGING_SENDER_ID',
+    defaultValue: '279608062017',
+  );
+  static const String _authDomain = String.fromEnvironment(
+    'FIREBASE_AUTH_DOMAIN',
+    defaultValue: 'volunteer-wrangler.firebaseapp.com',
+  );
+  static const String _storageBucket = String.fromEnvironment(
+    'FIREBASE_STORAGE_BUCKET',
+    defaultValue: 'volunteer-wrangler.firebasestorage.app',
+  );
+  static const String _measurementId = String.fromEnvironment(
+    'FIREBASE_MEASUREMENT_ID',
+    defaultValue: 'G-Q9024562TL',
+  );
   static const String _iosBundleId = String.fromEnvironment(
     'FIREBASE_IOS_BUNDLE_ID',
     defaultValue: 'app.roboref.roborefVolunteerHub',
@@ -55,6 +71,7 @@ class DefaultFirebaseOptions {
             ? _authDomain
             : '$_projectId.firebaseapp.com',
         storageBucket: _storageBucket.isNotEmpty ? _storageBucket : null,
+        measurementId: _measurementId.isNotEmpty ? _measurementId : null,
       );
 
   static FirebaseOptions get android => FirebaseOptions(

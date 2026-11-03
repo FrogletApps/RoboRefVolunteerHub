@@ -54,7 +54,7 @@ class AuthApiException implements Exception {
 class OtpAuthApiClient {
   static const String defaultBaseUrl = String.fromEnvironment(
     'AUTH_WORKER_BASE_URL',
-    defaultValue: 'https://roboref.app',
+    defaultValue: 'https://roboref-volunteer-auth-otp.james-pearson.workers.dev',
   );
 
   final http.Client _httpClient;

@@ -1,11 +1,11 @@
 {
-    "name": "roboref_volunteer_hub",
-    "short_name": "roboref_volunteer_hub",
+    "name": "RoboRef Volunteer Hub",
+    "short_name": "RoboRef",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "Volunteer management and UK event coordination for VEX Robotics competitions.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

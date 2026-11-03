@@ -33,7 +33,8 @@ It allows invited volunteers to authenticate via **Continue with Google** or pas
 | :--- | :--- | :--- |
 | **Client Framework** | **Flutter** (Dart ^3.5.0) | Cross-platform client for Web, Android, and iOS |
 | **State Management** | **Riverpod** 2.x | Reactive auth gating, state, and dependency injection |
-| **Identity & Sessions** | **Firebase Authentication** | Custom-token sign-in with long-lived remembered device sessions |
+| **Web Hosting** | **Cloudflare Workers Static Assets** | Edge-cached SPA hosting (`wrangler.jsonc`, `app/web/_headers`) with unlimited free bandwidth |
+| **Identity & Sessions** | **Firebase Authentication** | Custom-token & Google Sign-In with long-lived remembered device sessions |
 | **Database & Rules** | **Cloud Firestore** | Real-time rosters & strict `firestore.rules` PII isolation |
 | **Auth Edge Worker** | **Cloudflare Workers + KV + Email Service** | Standalone `workers/auth-otp/` invite validator, rate limiter & 6-digit OTP sender |
 | **External API** | **VEX Events API v2** | `events.vex.com` event data and schedule ingestion |
@@ -51,9 +52,9 @@ npx wrangler deploy
 ```
 
 ### 2. Firebase & Flutter Application (`app/`)
-1. Provision a Firebase project (London `europe-west2` Firestore region), deploy `firestore.rules`:
+1. Provision a Firebase project (London `europe-west2` Firestore region), deploy `firestore.rules` and indexes:
    ```bash
-   npx -y firebase-tools@latest deploy --only firestore:rules
+   npx -y firebase-tools@latest deploy --only firestore
    ```
 2. Configure FlutterFire inside `app/`:
    ```bash
@@ -66,6 +67,20 @@ npx wrangler deploy
    flutter analyze
    flutter test
    ```
+
+### 3. Cloudflare Web Hosting (`wrangler.jsonc`)
+1. Build the Flutter Web bundle (supports `--wasm` for WebAssembly + CanvasKit fallback):
+   ```bash
+   cd app
+   flutter build web --wasm
+   ```
+2. From the repository root, preview locally or deploy static assets to Cloudflare:
+   ```bash
+   cd ..
+   npx wrangler deploy
+   ```
+3. Authorize your Cloudflare domain(s) (e.g. `volunteer.roboref.app` and `roboref-volunteer-hub.<subdomain>.workers.dev`) in **Firebase Console → Authentication → Settings → Authorized domains** so Google Sign-In popups work.
+4. To attach `volunteer.roboref.app`, uncomment `"routes"` in `wrangler.jsonc` and re-run `npx wrangler deploy` (or attach it under **Workers & Pages → Custom Domains** in the Cloudflare Dashboard).
 
 ---
 
@@ -82,12 +97,18 @@ RoboRefVolunteerHub/
 │   │   │   ├── events/                     # UK VEX Events search, filter, VEX Events API client
 │   │   │   └── volunteering/               # Firestore event signups & roster screen
 │   │   └── main.dart                       # Persistent session initialization & reactive auth router
+│   ├── web/
+│   │   ├── _headers                        # Cloudflare edge security & cache revalidation headers
+│   │   ├── .assetsignore                   # Excludes internal Flutter build metadata from CDN upload
+│   │   ├── index.html                      # Flutter Web entry shell
+│   │   └── manifest.json                   # PWA manifest
 │   └── test/                               # Unit & widget test suites
 ├── workers/
 │   └── auth-otp/                           # Standalone Cloudflare Worker (OTP + Invite Gate + Rate Limiter)
 ├── firestore.rules                         # Hardened Cloud Firestore Security Rules
 ├── firestore.indexes.json                  # Firestore index definitions
-└── firebase.json                           # Firebase Hosting & Firestore configuration
+├── firebase.json                           # Cloud Firestore rules & indexes configuration
+└── wrangler.jsonc                          # Cloudflare Workers Static Assets SPA hosting configuration
 ```
 
 ---

@@ -1,0 +1,47 @@
+# Global security headers.
+# Cross-Origin-Opener-Policy uses same-origin-allow-popups so Firebase Auth Google Sign-In popups can return credentials cleanly.
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Cross-Origin-Opener-Policy: same-origin-allow-popups
+
+# Always revalidate the Flutter app shell, bootstrap loader, service worker, and version metadata on deploy.
+/
+  Cache-Control: no-cache
+
+/index.html
+  Cache-Control: no-cache
+
+/flutter_bootstrap.js
+  Cache-Control: no-cache
+
+/flutter_service_worker.js
+  Cache-Control: no-cache
+
+/version.json
+  Cache-Control: no-cache
+
+/manifest.json
+  Cache-Control: public, max-age=3600
+
+# Store compiled JS/WASM and CanvasKit/Skwasm bundles in browser cache, revalidating via Cloudflare ETag (304 Not Modified).
+/main.dart.js
+  Cache-Control: public, max-age=0, must-revalidate
+
+/main.dart.wasm
+  Cache-Control: public, max-age=0, must-revalidate
+
+/main.dart.mjs
+  Cache-Control: public, max-age=0, must-revalidate
+
+/canvaskit/*
+  Cache-Control: public, max-age=0, must-revalidate
+
+# Cache static icons.
+/icons/*
+  Cache-Control: public, max-age=86400
+
+/favicon.png
+  Cache-Control: public, max-age=86400
