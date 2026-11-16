@@ -146,9 +146,3 @@ RoboRefVolunteerHub/
 ├── package.json                            # Root npm shortcuts for build, deploy, & worker tests
 └── wrangler.jsonc                          # Cloudflare Workers Static Assets SPA hosting configuration
 ```
-
----
-
-## 📄 License
-
-Unofficial community utility for VEX Robotics competitions. VEX, VRC, V5RC, and VIQRC are trademarks of Innovation First International (IFI) / REC Foundation.
