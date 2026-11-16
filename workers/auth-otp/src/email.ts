@@ -1,4 +1,4 @@
-import type { Env } from "./types.ts";
+import { HttpError, type Env } from "./types.ts";
 
 export async function sendOtpEmail(
   env: Env,
@@ -36,11 +36,23 @@ export async function sendOtpEmail(
 </body>
 </html>`;
 
-  await env.EMAIL.send({
-    to: { email: recipientEmail },
-    from: { email: senderEmail, name: senderName },
-    subject,
-    text,
-    html,
-  });
+  try {
+    await env.EMAIL.send({
+      to: recipientEmail,
+      from: { email: senderEmail, name: senderName },
+      subject,
+      text,
+      html,
+    });
+  } catch (err) {
+    if (err instanceof HttpError) {
+      throw err;
+    }
+    console.error("Failed to send OTP email:", err);
+    throw new HttpError(
+      502,
+      "email_delivery_failed",
+      "Unable to send verification email right now. Please try again."
+    );
+  }
 }

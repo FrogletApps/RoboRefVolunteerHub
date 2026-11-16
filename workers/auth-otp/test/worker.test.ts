@@ -312,6 +312,11 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
 
     assert.equal(reqRes.status, 200);
     assert.equal(sentEmails.length, 1);
+    assert.equal(sentEmails[0].to, "jane.ref@example.co.uk");
+    assert.deepEqual(sentEmails[0].from, {
+      email: "noreply@roboref.app",
+      name: "RoboRef Volunteer Hub",
+    });
     const otp = extractOtpFromLastEmail();
 
     const verifyRes = await handleWorkerRequest(
@@ -729,5 +734,71 @@ describe("RoboRef Auth OTP Cloudflare Worker", () => {
       badRes.headers.get("Access-Control-Allow-Origin"),
       "https://*.roboref.app"
     );
+  });
+
+  it("returns 502 email_delivery_failed without committing cooldown when EMAIL.send throws", async () => {
+    let shouldFail = true;
+    const env = createEnv({
+      EMAIL: {
+        async send(msg: OutboundEmailPayload) {
+          if (shouldFail) {
+            throw new TypeError("Invalid EmailAddress: missing required field name");
+          }
+          sentEmails.push(msg);
+          return { messageId: `msg-${sentEmails.length}` };
+        },
+      },
+    });
+    const deps = {
+      fetchImpl: createMockFetch(),
+      now: () => new Date(currentTimeMs),
+    };
+
+    const failRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.88",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "new.volunteer@example.co.uk",
+          inviteCode: "UKVEX-2026",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      deps
+    );
+
+    assert.equal(failRes.status, 502);
+    const failJson = (await failRes.json()) as { ok: boolean; error: string };
+    assert.equal(failJson.ok, false);
+    assert.equal(failJson.error, "email_delivery_failed");
+    assert.equal(sentEmails.length, 0);
+
+    // Immediate retry must NOT be blocked by a 60s cooldown or daily quota
+    shouldFail = false;
+    const retryRes = await handleWorkerRequest(
+      new Request("https://roboref.app/api/auth/request-otp", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "CF-Connecting-IP": "203.0.113.88",
+        },
+        body: JSON.stringify({
+          mode: "join",
+          email: "new.volunteer@example.co.uk",
+          inviteCode: "UKVEX-2026",
+          turnstileToken: "valid-turnstile",
+        }),
+      }),
+      env,
+      deps
+    );
+
+    assert.equal(retryRes.status, 200);
+    assert.equal(sentEmails.length, 1);
   });
 });

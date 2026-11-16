@@ -235,6 +235,13 @@ async function handleRequestOtp(
     createdAtMs: now.getTime(),
   };
 
+  await sendOtpEmail(
+    env,
+    email,
+    otpCode,
+    Math.max(1, Math.round(otpTtlSeconds / 60))
+  );
+
   await env.AUTH_OTP_KV.put(`otp:${emailHash}`, JSON.stringify(otpRecord), {
     expirationTtl: otpTtlSeconds,
   });
@@ -246,13 +253,6 @@ async function handleRequestOtp(
     quotaState,
     rateConfig,
     now
-  );
-
-  await sendOtpEmail(
-    env,
-    email,
-    otpCode,
-    Math.max(1, Math.round(otpTtlSeconds / 60))
   );
 
   return {

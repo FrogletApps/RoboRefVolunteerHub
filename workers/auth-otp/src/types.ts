@@ -1,6 +1,6 @@
 export interface EmailRecipient {
   email: string;
-  name?: string;
+  name: string;
 }
 
 export interface OutboundEmailPayload {
