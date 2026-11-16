@@ -232,7 +232,7 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
                 TextField(
                   controller: _searchController,
                   decoration: InputDecoration(
-                    hintText: 'Search UK tournaments, cities, or SKUs...',
+                    hintText: 'Search tournaments, cities, or SKUs...',
                     prefixIcon: const Icon(Icons.search, size: 20),
                     suffixIcon: searchQuery.isNotEmpty
                         ? IconButton(
@@ -363,7 +363,10 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
                     children: [
                       const Icon(Icons.error_outline, size: 48, color: Colors.red),
                       const SizedBox(height: 12),
-                      Text('Error loading UK events: $err'),
+                      Text(
+                        'Error loading events: $err',
+                        textAlign: TextAlign.center,
+                      ),
                       const SizedBox(height: 12),
                       ElevatedButton(
                         onPressed: () {
@@ -382,7 +385,7 @@ class _EventsListScreenState extends ConsumerState<EventsListScreen> {
                 if (events.isEmpty) {
                   final hasSearchQuery = searchQuery.trim().isNotEmpty;
                   final isAllPrograms = selectedProgram == 'All';
-                  String emptyTitle = 'No UK events match your filters.';
+                  String emptyTitle = 'No events match your filters.';
                   String emptySubtitle =
                       'Tap Clear to reset filters or search with another keyword.';
 

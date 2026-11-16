@@ -267,7 +267,7 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    'UK VEX Robotics Competition Volunteer Management',
+                    'VEX Robotics Competition Volunteer Management',
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                   ),
