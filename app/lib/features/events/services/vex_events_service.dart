@@ -4,6 +4,16 @@ import 'package:http/http.dart' as http;
 import '../../../core/utils/sku_utils.dart';
 import '../models/event_model.dart';
 
+class VexEventsException implements Exception {
+  final String message;
+  final int? statusCode;
+
+  const VexEventsException(this.message, {this.statusCode});
+
+  @override
+  String toString() => message;
+}
+
 class VexEventsService {
   final http.Client _client;
   static const String vexBaseUrl = 'https://events.vex.com/api/v2';
@@ -122,24 +132,25 @@ class VexEventsService {
     ];
 
     final resultsBySku = <String, EventModel>{};
+    var loadedFromApi = false;
 
     for (final uri in candidateUrls) {
       try {
-        final response = await _client.get(
-          uri,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'RoboRefVolunteerHub/1.0',
-          },
-        ).timeout(const Duration(seconds: 8));
+        final response = await _client
+            .get(
+              uri,
+              headers: const {'Accept': 'application/json'},
+            )
+            .timeout(const Duration(seconds: 8));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          if (data['data'] is List) {
+          if (data is Map<String, dynamic> && data['data'] is List) {
             for (final raw in data['data'] as List) {
               final event = EventModel.fromJson(raw as Map<String, dynamic>);
               resultsBySku[event.sku.trim().toUpperCase()] = event;
             }
+            loadedFromApi = true;
             break;
           }
         }
@@ -148,13 +159,10 @@ class VexEventsService {
       }
     }
 
-    if (resultsBySku.length < normalizedSkus.length) {
-      for (final fallback in _getFallbackUkEvents()) {
-        final key = fallback.sku.trim().toUpperCase();
-        if (normalizedSkus.contains(key) && !resultsBySku.containsKey(key)) {
-          resultsBySku[key] = fallback;
-        }
-      }
+    if (!loadedFromApi) {
+      throw const VexEventsException(
+        'Unable to load event data from VEX Events. Please check your connection and try again.',
+      );
     }
 
     return resultsBySku.values
@@ -170,7 +178,7 @@ class VexEventsService {
     String? query,
     String? program,
     int page = 1,
-    int perPage = 40,
+    int perPage = 250,
   }) async {
     final queryParams = <String, List<String>>{
       'page': [page.toString()],
@@ -202,21 +210,23 @@ class VexEventsService {
 
     for (final uri in candidateUrls) {
       try {
-        final response = await _client.get(
-          uri,
-          headers: {
-            'Accept': 'application/json',
-            'User-Agent': 'RoboRefVolunteerHub/1.0',
-          },
-        ).timeout(const Duration(seconds: 8));
+        final response = await _client
+            .get(
+              uri,
+              headers: const {'Accept': 'application/json'},
+            )
+            .timeout(const Duration(seconds: 8));
 
         if (response.statusCode == 200) {
           final data = jsonDecode(response.body);
-          if (data['data'] is List) {
+          if (data is Map<String, dynamic> && data['data'] is List) {
             final events = (data['data'] as List)
                 .map((e) => EventModel.fromJson(e as Map<String, dynamic>))
                 .toList();
-            if (events.isNotEmpty) return events;
+            return events
+                .where(
+                    (e) => _matchesProgram(e, program) && _matchesQuery(e, query))
+                .toList();
           }
         }
       } catch (e) {
@@ -224,89 +234,8 @@ class VexEventsService {
       }
     }
 
-    // Fallback: Return realistic UK upcoming events if network/API is unavailable
-    return _getFallbackUkEvents(program: program, query: query);
-  }
-
-  /// Realistic fallback UK events for offline / preview use
-  List<EventModel> _getFallbackUkEvents({String? program, String? query}) {
-    final now = DateTime.now();
-    final events = [
-      EventModel(
-        id: 54101,
-        sku: 'RE-V5RC-26-9102',
-        name: 'UK VEX V5RC National Championship 2026-2027',
-        program: 'V5RC',
-        season: '2026-2027',
-        startDate: now.add(const Duration(days: 14)).toIso8601String(),
-        endDate: now.add(const Duration(days: 16)).toIso8601String(),
-        venue: 'Telford International Centre',
-        city: 'Telford',
-        region: 'Midlands',
-        country: 'United Kingdom',
-      ),
-      EventModel(
-        id: 54102,
-        sku: 'RE-VIQRC-26-8821',
-        name: 'London South VEX IQ Robotics Challenge',
-        program: 'VIQRC',
-        season: '2026-2027',
-        startDate: now.add(const Duration(days: 7)).toIso8601String(),
-        endDate: now.add(const Duration(days: 7)).toIso8601String(),
-        venue: 'Queen Elizabeth Olympic Park',
-        city: 'London',
-        region: 'Greater London',
-        country: 'United Kingdom',
-      ),
-      EventModel(
-        id: 54103,
-        sku: 'RE-V5RC-26-7734',
-        name: 'Midlands Autumn V5RC Regional Qualifier',
-        program: 'V5RC',
-        season: '2026-2027',
-        startDate: now.add(const Duration(days: 21)).toIso8601String(),
-        endDate: now.add(const Duration(days: 21)).toIso8601String(),
-        venue: 'University of Warwick Sports Hub',
-        city: 'Coventry',
-        region: 'Midlands',
-        country: 'United Kingdom',
-      ),
-      EventModel(
-        id: 54104,
-        sku: 'RE-VIQRC-26-6643',
-        name: 'Manchester North West VIQRC Scrimmage',
-        program: 'VIQRC',
-        season: '2026-2027',
-        startDate: now.add(const Duration(days: 28)).toIso8601String(),
-        endDate: now.add(const Duration(days: 28)).toIso8601String(),
-        venue: 'Manchester Central Convention Complex',
-        city: 'Manchester',
-        region: 'North West',
-        country: 'United Kingdom',
-      ),
-      EventModel(
-        id: 54105,
-        sku: 'RE-VEXU-26-5512',
-        name: 'UK & Ireland VEX U University Invitational',
-        program: 'VEX U',
-        season: '2026-2027',
-        startDate: now.add(const Duration(days: 35)).toIso8601String(),
-        endDate: now.add(const Duration(days: 36)).toIso8601String(),
-        venue: 'Imperial College London',
-        city: 'London',
-        region: 'Greater London',
-        country: 'United Kingdom',
-      ),
-    ];
-
-    return events.where((e) {
-      if (!_matchesProgram(e, program)) {
-        return false;
-      }
-      if (!_matchesQuery(e, query)) {
-        return false;
-      }
-      return true;
-    }).toList();
+    throw const VexEventsException(
+      'Unable to load event data from VEX Events. Please check your connection and try again.',
+    );
   }
 }

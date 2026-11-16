@@ -18,6 +18,109 @@ import 'package:roboref_volunteer_hub/features/volunteering/state/volunteering_p
 void main() {
   late MockClient offlineClient;
 
+  MockClient buildMockEventsClient() {
+    final now = DateTime.now();
+    final fixtures = [
+      {
+        'id': 54101,
+        'sku': 'RE-V5RC-26-9102',
+        'name': 'UK VEX V5RC National Championship 2026-2027',
+        'program': {'id': 1, 'code': 'V5RC'},
+        'season': {'id': 204, 'name': '2026-2027'},
+        'start': now.add(const Duration(days: 14)).toIso8601String(),
+        'end': now.add(const Duration(days: 16)).toIso8601String(),
+        'location': {
+          'venue': 'Telford International Centre',
+          'city': 'Telford',
+          'region': 'Midlands',
+          'country': 'United Kingdom',
+        },
+      },
+      {
+        'id': 54102,
+        'sku': 'RE-VIQRC-26-8821',
+        'name': 'London South VEX IQ Robotics Challenge',
+        'program': {'id': 41, 'code': 'VIQRC'},
+        'season': {'id': 203, 'name': '2026-2027'},
+        'start': now.add(const Duration(days: 7)).toIso8601String(),
+        'end': now.add(const Duration(days: 7)).toIso8601String(),
+        'location': {
+          'venue': 'Queen Elizabeth Olympic Park',
+          'city': 'London',
+          'region': 'Greater London',
+          'country': 'United Kingdom',
+        },
+      },
+      {
+        'id': 54103,
+        'sku': 'RE-V5RC-26-7734',
+        'name': 'Midlands Autumn V5RC Regional Qualifier',
+        'program': {'id': 1, 'code': 'V5RC'},
+        'season': {'id': 204, 'name': '2026-2027'},
+        'start': now.add(const Duration(days: 21)).toIso8601String(),
+        'end': now.add(const Duration(days: 21)).toIso8601String(),
+        'location': {
+          'venue': 'University of Warwick Sports Hub',
+          'city': 'Coventry',
+          'region': 'Midlands',
+          'country': 'United Kingdom',
+        },
+      },
+      {
+        'id': 54104,
+        'sku': 'RE-VIQRC-26-6643',
+        'name': 'Manchester North West VIQRC Scrimmage',
+        'program': {'id': 41, 'code': 'VIQRC'},
+        'season': {'id': 203, 'name': '2026-2027'},
+        'start': now.add(const Duration(days: 28)).toIso8601String(),
+        'end': now.add(const Duration(days: 28)).toIso8601String(),
+        'location': {
+          'venue': 'Manchester Central Convention Complex',
+          'city': 'Manchester',
+          'region': 'North West',
+          'country': 'United Kingdom',
+        },
+      },
+      {
+        'id': 54105,
+        'sku': 'RE-VEXU-26-5512',
+        'name': 'UK & Ireland VEX U University Invitational',
+        'program': {'id': 4, 'code': 'VEX U'},
+        'season': {'id': 205, 'name': '2026-2027'},
+        'start': now.add(const Duration(days: 35)).toIso8601String(),
+        'end': now.add(const Duration(days: 36)).toIso8601String(),
+        'location': {
+          'venue': 'Imperial College London',
+          'city': 'London',
+          'region': 'Greater London',
+          'country': 'United Kingdom',
+        },
+      },
+    ];
+
+    return MockClient((request) async {
+      final skuFilters = request.url.queryParametersAll['sku[]'] ?? const [];
+      final programFilters =
+          request.url.queryParametersAll['program[]'] ?? const [];
+
+      final matched = fixtures.where((item) {
+        if (skuFilters.isNotEmpty && !skuFilters.contains(item['sku'])) {
+          return false;
+        }
+        if (programFilters.isNotEmpty) {
+          final prog = item['program'] as Map<String, dynamic>;
+          final progId = prog['id'].toString();
+          if (!programFilters.contains(progId)) {
+            return false;
+          }
+        }
+        return true;
+      }).toList();
+
+      return http.Response(jsonEncode({'data': matched}), 200);
+    });
+  }
+
   const alexSession = AuthSession(
     uid: 'vol-alex-turner',
     email: 'alex.turner@example.org',
@@ -48,7 +151,7 @@ void main() {
 
   test('VexEventsService filters VEX V5, VEX IQ, and combined SKU+program+query',
       () async {
-    final service = VexEventsService(client: offlineClient);
+    final service = VexEventsService(client: buildMockEventsClient());
 
     final v5Events = await service.searchUkEvents(program: 'VEX V5');
     expect(v5Events, isNotEmpty);
@@ -162,7 +265,7 @@ void main() {
         ),
         signupStoreProvider.overrideWithValue(signupStore),
         vexEventsServiceProvider
-            .overrideWithValue(VexEventsService(client: offlineClient)),
+            .overrideWithValue(VexEventsService(client: buildMockEventsClient())),
       ],
     );
     addTearDown(container.dispose);
@@ -268,7 +371,7 @@ void main() {
         ),
         signupStoreProvider.overrideWithValue(InMemorySignupStore()),
         vexEventsServiceProvider
-            .overrideWithValue(VexEventsService(client: offlineClient)),
+            .overrideWithValue(VexEventsService(client: buildMockEventsClient())),
       ],
     );
     addTearDown(container.dispose);
@@ -360,7 +463,7 @@ void main() {
         ),
         signupStoreProvider.overrideWithValue(InMemorySignupStore()),
         vexEventsServiceProvider
-            .overrideWithValue(VexEventsService(client: offlineClient)),
+            .overrideWithValue(VexEventsService(client: buildMockEventsClient())),
       ],
     );
     addTearDown(container.dispose);
@@ -392,6 +495,59 @@ void main() {
     expect(
       find.text('You have no events marked as Available.'),
       findsOneWidget,
+    );
+  });
+
+  testWidgets(
+      'VexEventsService throws and EventsListScreen shows error message with Retry when API cannot be reached',
+      (WidgetTester tester) async {
+    final failingService = VexEventsService(client: offlineClient);
+
+    await expectLater(
+      () => failingService.searchUkEvents(),
+      throwsA(isA<VexEventsException>()),
+    );
+    await expectLater(
+      () => failingService.searchEventsBySkus(skus: {'RE-V5RC-26-9102'}),
+      throwsA(isA<VexEventsException>()),
+    );
+
+    final authBackend = InMemoryAuthBackend(
+      initialSession: alexSession,
+      initialProfile: alexVolunteer,
+    );
+    addTearDown(authBackend.dispose);
+
+    final container = ProviderContainer(
+      overrides: [
+        authBackendProvider.overrideWithValue(authBackend),
+        otpAuthApiClientProvider.overrideWithValue(
+          OtpAuthApiClient(httpClient: offlineClient),
+        ),
+        signupStoreProvider.overrideWithValue(InMemorySignupStore()),
+        vexEventsServiceProvider.overrideWithValue(failingService),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: const RoboRefVolunteerHubApp(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text(
+        'Error loading events: Unable to load event data from VEX Events. Please check your connection and try again.',
+      ),
+      findsOneWidget,
+    );
+    expect(find.widgetWithText(ElevatedButton, 'Retry'), findsOneWidget);
+    expect(
+      find.text('UK VEX V5RC National Championship 2026-2027'),
+      findsNothing,
     );
   });
 }
