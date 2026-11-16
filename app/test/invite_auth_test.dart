@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -322,6 +323,22 @@ void main() {
       expect(session.email, equals('google.volunteer@example.co.uk'));
       expect(session.displayName, equals('Google Volunteer'));
       expect(issuedOtps, isEmpty);
+    });
+
+    test(
+        'Maps CODE_EXCHANGE malformed response FirebaseAuthException to actionable message',
+        () {
+      final mapped = FirebaseAuthBackend.mapFirebaseAuthException(
+        FirebaseAuthException(
+          code: 'invalid-credential',
+          message:
+              'Remote site returned malformed reponse that cannot be parsed for google.com for CODE_EXCHANGE',
+        ),
+      );
+
+      expect(mapped.code, equals('google_code_exchange_failed'));
+      expect(mapped.message, contains('CODE_EXCHANGE'));
+      expect(mapped.message, isNot(contains('malformed reponse')));
     });
   });
 }

@@ -145,12 +145,64 @@ class FirebaseAuthBackend implements AuthBackend {
     return session;
   }
 
+  /// Maps a [FirebaseAuthException] from Google Sign-In into a user-friendly
+  /// [AuthApiException], surfacing actionable guidance for `CODE_EXCHANGE` errors.
+  static AuthApiException mapFirebaseAuthException(FirebaseAuthException e) {
+    if (e.code == 'popup-closed-by-user' ||
+        e.code == 'cancelled-popup-request' ||
+        e.code == 'web-context-canceled') {
+      return const AuthApiException(
+        code: 'google_signin_cancelled',
+        message: 'Google sign-in was cancelled.',
+      );
+    }
+    if (e.code == 'popup-blocked') {
+      return const AuthApiException(
+        code: 'popup_blocked',
+        message:
+            'The Google sign-in popup was blocked by your browser. Please allow popups for this site and try again.',
+      );
+    }
+    if (e.code == 'unauthorized-domain') {
+      return const AuthApiException(
+        code: 'unauthorized_domain',
+        message:
+            'This domain is not authorized for Google Sign-In in Firebase Authentication -> Settings -> Authorized domains.',
+      );
+    }
+
+    final normalizedMessage = (e.message ?? '').toLowerCase();
+    if (normalizedMessage.contains('code_exchange') ||
+        normalizedMessage.contains('malformed reponse') ||
+        normalizedMessage.contains('malformed response') ||
+        normalizedMessage.contains('invalid_idp_response')) {
+      debugPrint('FirebaseAuth Google CODE_EXCHANGE error [${e.code}]: ${e.message}');
+      return const AuthApiException(
+        code: 'google_code_exchange_failed',
+        message:
+            'Google Sign-In could not complete the OAuth token exchange (CODE_EXCHANGE). Please try again in a moment, check that the Web client secret in Firebase Console -> Authentication -> Sign-in method -> Google matches Google Cloud Console, or sign in with a 6-digit email code below.',
+      );
+    }
+
+    return AuthApiException(
+      code: e.code,
+      message: e.message ?? 'Google sign-in failed. Please try again.',
+    );
+  }
+
   @override
   Future<GoogleAuthResult> signInWithGoogle() async {
-    final provider = GoogleAuthProvider();
-    provider.setCustomParameters(const {'prompt': 'select_account'});
+    final provider = GoogleAuthProvider()
+      ..addScope('email')
+      ..addScope('profile')
+      ..setCustomParameters(const {'prompt': 'select_account'});
 
     try {
+      if (_firebaseAuth.currentUser != null &&
+          _lastKnownSession?.inviteVerified != true) {
+        await _firebaseAuth.signOut();
+      }
+
       final UserCredential cred = kIsWeb
           ? await _firebaseAuth.signInWithPopup(provider)
           : await _firebaseAuth.signInWithProvider(provider);
@@ -180,25 +232,7 @@ class FirebaseAuthBackend implements AuthBackend {
 
       return GoogleAuthResult(session: session, idToken: idToken);
     } on FirebaseAuthException catch (e) {
-      if (e.code == 'popup-closed-by-user' ||
-          e.code == 'cancelled-popup-request' ||
-          e.code == 'web-context-canceled') {
-        throw const AuthApiException(
-          code: 'google_signin_cancelled',
-          message: 'Google sign-in was cancelled.',
-        );
-      }
-      if (e.code == 'unauthorized-domain') {
-        throw const AuthApiException(
-          code: 'unauthorized_domain',
-          message:
-              'This domain is not authorized for Google Sign-In in Firebase Authentication -> Settings -> Authorized domains.',
-        );
-      }
-      throw AuthApiException(
-        code: e.code,
-        message: e.message ?? 'Google sign-in failed. Please try again.',
-      );
+      throw mapFirebaseAuthException(e);
     }
   }
 

@@ -13,6 +13,7 @@
     "deploy:all": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 -DeployWorker",
     "deploy:dry-run": "powershell -ExecutionPolicy Bypass -File scripts/deploy.ps1 -DryRun",
     "deploy:worker": "npm --prefix workers/auth-otp run deploy",
+    "deploy:auth": "npx -y firebase-tools@latest deploy --only auth",
     "deploy:firestore": "npx -y firebase-tools@latest deploy --only firestore",
     "test:worker": "npm --prefix workers/auth-otp test",
     "typecheck:worker": "npm --prefix workers/auth-otp run typecheck",
